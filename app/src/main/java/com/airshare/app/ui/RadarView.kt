@@ -73,7 +73,7 @@ fun RadarView(
                         val py = center.y + radius * sin(angle).toFloat()
 
                         val distance = sqrt((offset.x - px) * (offset.x - px) + (offset.y - py) * (offset.y - py))
-                        if (distance <= 30.dp.toPx()) {
+                        if (distance <= 44.dp.toPx()) { // Increased touch target to 44dp for accessibility
                             onPeerTapped(peer)
                         }
                     }

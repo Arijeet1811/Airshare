@@ -104,17 +104,32 @@ class AirShareService : Service() {
     fun sendFiles(host: String, files: List<Pair<Uri, String>>) {
         serviceScope.launch {
             _transferState.value = TransferState.Transferring(0f, "Starting...")
-            val result = transferManager.sendFiles(host, contentResolver, files) { index, sent, total ->
-                val progress = sent.toFloat() / (if(total == 0L) 1L else total)
-                _transferState.value = TransferState.Transferring(progress, files[index].second)
-                updateNotification("Sending file ${index + 1}: ${(progress * 100).toInt()}%")
-            }
-            result.onSuccess {
-                _transferState.value = TransferState.Success
-                updateNotification("Files sent successfully!")
-            }.onFailure { e ->
-                _transferState.value = TransferState.Error(e.message ?: "Send failed")
-                updateNotification("Failed to send files")
+            
+            var attempt = 0
+            val maxAttempts = 3
+            var success = false
+            
+            while (attempt < maxAttempts && !success) {
+                attempt++
+                val result = transferManager.sendFiles(host, contentResolver, files) { index, sent, total ->
+                    val progress = sent.toFloat() / (if(total == 0L) 1L else total)
+                    _transferState.value = TransferState.Transferring(progress, files[index].second)
+                    updateNotification("Sending file ${index + 1}: ${(progress * 100).toInt()}%")
+                }
+                
+                result.onSuccess {
+                    _transferState.value = TransferState.Success
+                    updateNotification("Files sent successfully!")
+                    success = true
+                }.onFailure { e ->
+                    if (attempt == maxAttempts) {
+                        _transferState.value = TransferState.Error(e.message ?: "Send failed")
+                        updateNotification("Failed to send files")
+                    } else {
+                        updateNotification("Retrying send (Attempt $attempt)...")
+                        kotlinx.coroutines.delay(2000)
+                    }
+                }
             }
         }
     }

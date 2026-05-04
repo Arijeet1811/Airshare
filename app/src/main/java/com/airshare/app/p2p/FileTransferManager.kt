@@ -79,6 +79,9 @@ class FileTransferManager {
                     put("fileName", displayName)
                     put("fileSize", fileSize)
                     put("mimeType", contentResolver.getType(uri) ?: "application/octet-stream")
+                    // Calculate hash for integrity
+                    val hashInputStream = contentResolver.openInputStream(uri)
+                    put("sha256", hashInputStream?.use { calculateHash(it) } ?: "")
                 }
                 
                 val (iv, encryptedMetadata) = encryptWithGCM(metadataJson.toString().toByteArray(), sessionKey)
@@ -190,6 +193,7 @@ class FileTransferManager {
                 val fileName = metadataJson.getString("fileName")
                 val fileSize = metadataJson.getLong("fileSize")
                 val mimeType = metadataJson.getString("mimeType")
+                val expectedHash = metadataJson.optString("sha256", "")
 
                 // Handle the onReceiveRequest callback to ask for user permission
                 if (!onReceiveRequest(fileName, fileSize)) {
@@ -241,6 +245,13 @@ class FileTransferManager {
                         val finalOutput = fileCipher.doFinal()
                         if (finalOutput != null) {
                             fileOutputStream.write(finalOutput)
+                        }
+
+                        // Verify integrity
+                        val verificationStream = contentResolver.openInputStream(uri)
+                        val actualHash = verificationStream?.use { calculateHash(it) }
+                        if (expectedHash.isNotEmpty() && actualHash != expectedHash) {
+                            throw IOException("Hash verification failed for $fileName")
                         }
                     }
                 } catch (e: Exception) {
