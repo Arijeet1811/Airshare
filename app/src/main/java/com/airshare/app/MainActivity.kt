@@ -49,24 +49,19 @@ class MainActivity : ComponentActivity() {
     private var isBound by mutableStateOf(false)
 
     private val permissionsToRequest = mutableListOf<String>().apply {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.BLUETOOTH_SCAN)
             add(Manifest.permission.BLUETOOTH_ADVERTISE)
             add(Manifest.permission.BLUETOOTH_CONNECT)
+            add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            add(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            add(Manifest.permission.BLUETOOTH_SCAN)
+            add(Manifest.permission.BLUETOOTH_ADVERTISE)
+            add(Manifest.permission.BLUETOOTH_CONNECT)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
         } else {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            add(Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE)
-        }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            add(Manifest.permission.NEARBY_WIFI_DEVICES)
         }
     }
 
@@ -142,7 +137,11 @@ class MainActivity : ComponentActivity() {
             var isSenderMode by remember { mutableStateOf(false) }
             var dismissedPeerId by remember { mutableStateOf<String?>(null) }
 
-            val activeOverlayPeer = manualPeer ?: if (triggeredPeer?.id != dismissedPeerId) triggeredPeer else null
+            // Handle incoming request UI
+            val incomingRequest = transferState as? TransferState.Request
+            val activeOverlayPeer = incomingRequest?.let { 
+                Peer(id = "incoming", name = "Sender", rssi = 0) // We don't know the peer precisely here without more handshake, but we show the overlay
+            } ?: manualPeer ?: if (triggeredPeer?.id != dismissedPeerId) triggeredPeer else null
 
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -196,29 +195,36 @@ class MainActivity : ComponentActivity() {
                                 Text("Select Files to Share", color = Color.White)
                             }
                         }
+
                         AirDropOverlay(
                             peer = activeOverlayPeer,
-                            isSender = isSenderMode,
+                            isSender = incomingRequest == null && isSenderMode,
                             onDismiss = { 
-                                dismissedPeerId = activeOverlayPeer?.id 
-                                manualPeer = null
-                                isSenderMode = false
+                                if (incomingRequest != null) {
+                                    incomingRequest.response.complete(false)
+                                } else {
+                                    dismissedPeerId = activeOverlayPeer?.id 
+                                    manualPeer = null
+                                    isSenderMode = false
+                                }
                             },
                             onAccept = { peer ->
-                                if (selectedUris.isNotEmpty()) {
-                                    if (isBound && airShareService != null) {
-                                        val filesToSend = selectedUris.map { uri ->
-                                            Pair(uri, getFileName(uri))
-                                        }
-                                        airShareService?.setPendingFiles(filesToSend)
-                                        // WiFi Direct connect logic would be triggered here in real app
-                                        // For now we just use the UI feedback
-                                        isSenderMode = true 
-                                    } else {
-                                        Toast.makeText(this@MainActivity, "Service not bound", Toast.LENGTH_SHORT).show()
-                                    }
+                                if (incomingRequest != null) {
+                                    incomingRequest.response.complete(true)
                                 } else {
-                                    Toast.makeText(this@MainActivity, "Please select files first", Toast.LENGTH_SHORT).show()
+                                    if (selectedUris.isNotEmpty()) {
+                                        if (isBound && airShareService != null) {
+                                            val filesToSend = selectedUris.map { uri ->
+                                                Pair(uri, getFileName(uri))
+                                            }
+                                            airShareService?.setPendingFiles(filesToSend)
+                                            isSenderMode = true 
+                                        } else {
+                                            Toast.makeText(this@MainActivity, "Service not bound", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } else {
+                                        Toast.makeText(this@MainActivity, "Please select files first", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                         )
@@ -229,8 +235,7 @@ class MainActivity : ComponentActivity() {
                             }
                             is TransferState.Success -> {
                                 SuccessAnimation { 
-                                    // Normally we'd reset the state here, but the user requested state driven by Service
-                                    // In a production app, the service would move back to Idle or we local-track dismiss
+                                    // Reset state after success animation
                                 }
                             }
                             is TransferState.Error -> {
@@ -242,7 +247,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-
         checkAndRequestPermissions()
     }
 

@@ -28,6 +28,9 @@ import kotlinx.coroutines.launch
 import android.net.Uri
 import java.io.File
 
+import kotlinx.coroutines.CompletableDeferred
+import android.content.pm.ServiceInfo
+
 class AirShareService : Service() {
 
     private val binder = LocalBinder()
@@ -52,7 +55,6 @@ class AirShareService : Service() {
         super.onCreate()
         createNotificationChannel()
         bleManager = BleManager(this) { peer ->
-            // Proximity detected, initiate WiFi Direct discovery
             wifiDirectManager.initiateDiscovery()
         }
         wifiDirectManager = WifiDirectManager(this) { info ->
@@ -60,6 +62,7 @@ class AirShareService : Service() {
                 val targetHost = info.groupOwnerAddress.hostAddress
                 if (pendingFiles.isNotEmpty()) {
                     sendFiles(targetHost, pendingFiles)
+                    pendingFiles = emptyList() // Clear after sending
                 }
             }
         }
@@ -71,19 +74,28 @@ class AirShareService : Service() {
 
     fun startReceiving() {
         serviceScope.launch {
-            val outputDir = File(getExternalFilesDir(null), "AirShareReceived")
-            if (!outputDir.exists()) outputDir.mkdirs()
-
             while (isRunning) {
-                transferManager.receiveFiles(outputDir) { fileName, progress, total ->
-                    _transferState.value = TransferState.Transferring(progress.toFloat() / total, fileName)
-                    updateNotification("Receiving $fileName: ${(progress * 100 / total)}%")
-                }.onSuccess {
+                transferManager.receiveFiles(
+                    contentResolver = contentResolver,
+                    onReceiveRequest = { fileName, fileSize ->
+                        val deferred = CompletableDeferred<Boolean>()
+                        _transferState.value = TransferState.Request(fileName, fileSize, deferred)
+                        val result = deferred.await()
+                        if (!result) {
+                            _transferState.value = TransferState.Idle
+                        }
+                        result
+                    },
+                    onProgress = { fileName, progress, total ->
+                        _transferState.value = TransferState.Transferring(progress.toFloat() / total, fileName)
+                        updateNotification("Receiving $fileName: ${(progress * 100 / (if(total == 0L) 1L else total))}%")
+                    }
+                ).onSuccess {
                     _transferState.value = TransferState.Success
                     updateNotification("Received completed")
                 }.onFailure { e ->
                     _transferState.value = TransferState.Error(e.message ?: "Receive failed")
-                    updateNotification("Receive error: ${e.message}")
+                    updateNotification("Receive error")
                 }
             }
         }
@@ -93,7 +105,7 @@ class AirShareService : Service() {
         serviceScope.launch {
             _transferState.value = TransferState.Transferring(0f, "Starting...")
             val result = transferManager.sendFiles(host, contentResolver, files) { index, sent, total ->
-                val progress = sent.toFloat() / total
+                val progress = sent.toFloat() / (if(total == 0L) 1L else total)
                 _transferState.value = TransferState.Transferring(progress, files[index].second)
                 updateNotification("Sending file ${index + 1}: ${(progress * 100).toInt()}%")
             }
@@ -102,7 +114,7 @@ class AirShareService : Service() {
                 updateNotification("Files sent successfully!")
             }.onFailure { e ->
                 _transferState.value = TransferState.Error(e.message ?: "Send failed")
-                updateNotification("Failed to send files: ${e.message}")
+                updateNotification("Failed to send files")
             }
         }
     }
@@ -125,6 +137,8 @@ class AirShareService : Service() {
     override fun onDestroy() {
         isRunning = false
         bleManager.stopDiscovery()
+        wifiDirectManager.cleanup()
+        serviceJob.cancel()
         super.onDestroy()
     }
 
@@ -132,13 +146,10 @@ class AirShareService : Service() {
         val notification = createNotification("Searching for nearby devices...")
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Specify foreground service type for Android 10+
-            // We use CONNECTED_DEVICE as required for Bluetooth/Wi-Fi P2P communication
             val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                // For Android 14+, we can also include NEARBY_DEVICE if we wanted, but let's stick to the requested change.
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             } else {
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             }
             startForeground(NOTIFICATION_ID, notification, type)
         } else {

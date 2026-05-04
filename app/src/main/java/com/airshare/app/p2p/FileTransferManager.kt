@@ -3,9 +3,10 @@ package com.airshare.app.p2p
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
+import org.json.JSONObject
 import java.io.*
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -24,6 +25,7 @@ import java.security.spec.MGF1ParameterSpec
 class FileTransferManager {
 
     private val PORT = 8888
+    private val SOCKET_TIMEOUT = 10000 // 10 seconds
 
     suspend fun sendFiles(
         host: String,
@@ -34,7 +36,8 @@ class FileTransferManager {
         runCatching {
             val socket = Socket()
             socket.bind(null)
-            socket.connect(InetSocketAddress(host, PORT), 5000)
+            socket.connect(InetSocketAddress(host, PORT), SOCKET_TIMEOUT)
+            socket.soTimeout = SOCKET_TIMEOUT
 
             val inputStream = socket.getInputStream()
             val dataInputStream = DataInputStream(inputStream)
@@ -67,13 +70,25 @@ class FileTransferManager {
             files.forEachIndexed { index, (uri, displayName) ->
                 val fileSize = getFileSize(contentResolver, uri)
                 
-                // 4. Encrypt and Send Metadata
-                val metadata = "$displayName|$fileSize"
-                val (iv, encryptedMetadata) = encryptWithGCM(metadata.toByteArray(), sessionKey)
+                // 4. Metadata Handshake (JSON)
+                val metadataJson = JSONObject().apply {
+                    put("fileName", displayName)
+                    put("fileSize", fileSize)
+                    put("mimeType", contentResolver.getType(uri) ?: "application/octet-stream")
+                }
+                
+                val (iv, encryptedMetadata) = encryptWithGCM(metadataJson.toString().toByteArray(), sessionKey)
                 dataOutputStream.writeInt(iv.size)
                 dataOutputStream.write(iv)
                 dataOutputStream.writeInt(encryptedMetadata.size)
                 dataOutputStream.write(encryptedMetadata)
+                dataOutputStream.flush()
+
+                // Wait for receiver confirmation
+                val isAccepted = dataInputStream.readBoolean()
+                if (!isAccepted) {
+                    throw IOException("Receiver declined file: $displayName")
+                }
 
                 // 5. Encrypt and Stream File content
                 val fileIV = generateIV()
@@ -84,7 +99,7 @@ class FileTransferManager {
                 fileCipher.init(Cipher.ENCRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
 
                 val fileInputStream = contentResolver.openInputStream(uri) ?: return@forEachIndexed
-                val buffer = ByteArray(8192)
+                val buffer = ByteArray(1024)
                 var bytesRead: Int
                 var totalBytesProcessed = 0L
 
@@ -117,10 +132,16 @@ class FileTransferManager {
         } ?: 0L
     }
 
-    suspend fun receiveFiles(outputDir: File, onProgress: (String, Long, Long) -> Unit): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun receiveFiles(
+        contentResolver: ContentResolver,
+        onReceiveRequest: suspend (String, Long) -> Boolean,
+        onProgress: (String, Long, Long) -> Unit
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         val serverSocket = ServerSocket(PORT)
         runCatching {
+            serverSocket.soTimeout = SOCKET_TIMEOUT
             val socket = serverSocket.accept()
+            socket.setSoTimeout(SOCKET_TIMEOUT)
             
             val inputStream = socket.getInputStream()
             val dataInputStream = DataInputStream(inputStream)
@@ -152,7 +173,7 @@ class FileTransferManager {
             val fileCount = dataInputStream.readInt()
 
             repeat(fileCount) {
-                // 4. Decrypt Metadata
+                // 4. Decrypt Metadata (Handshake)
                 val ivSize = dataInputStream.readInt()
                 val iv = ByteArray(ivSize)
                 dataInputStream.readFully(iv)
@@ -161,12 +182,20 @@ class FileTransferManager {
                 val encryptedMetadata = ByteArray(metadataSize)
                 dataInputStream.readFully(encryptedMetadata)
                 
-                val metadataString = String(decryptWithGCM(encryptedMetadata, sessionKey, iv))
-                val parts = metadataString.split("|")
-                val fileName = parts[0]
-                val fileSize = parts[1].toLong()
+                val metadataJson = JSONObject(String(decryptWithGCM(encryptedMetadata, sessionKey, iv)))
+                val fileName = metadataJson.getString("fileName")
+                val fileSize = metadataJson.getLong("fileSize")
+                val mimeType = metadataJson.getString("mimeType")
 
-                // Sanitize filename to prevent path traversal
+                // Handle the onReceiveRequest callback to ask for user permission
+                if (!onReceiveRequest(fileName, fileSize)) {
+                    dataOutputStream.writeBoolean(false) // Decline
+                    throw IOException("User declined file transfer")
+                }
+                dataOutputStream.writeBoolean(true) // Accept
+                dataOutputStream.flush()
+
+                // Sanitize filename
                 val safeName = fileName.replace("..", "_").replace("/", "_").replace("\\", "_")
 
                 // 5. Decrypt File content
@@ -174,22 +203,51 @@ class FileTransferManager {
                 val fileIV = ByteArray(fileIVSize)
                 dataInputStream.readFully(fileIV)
 
-                // Read ALL encrypted bytes first (fileSize + 16-byte GCM tag)
-                val encryptedFileSize = (fileSize + 16).toInt()
-                val encryptedFileBytes = ByteArray(encryptedFileSize)
-                dataInputStream.readFully(encryptedFileBytes)
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                    put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                    put(MediaStore.Downloads.RELATIVE_PATH, "Download/AirShare/")
+                }
 
-                val fileCipher = Cipher.getInstance("AES/GCM/NoPadding")
-                fileCipher.init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
-                
-                val decryptedFileBytes = fileCipher.doFinal(encryptedFileBytes)
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IOException("Failed to create MediaStore entry")
 
-                val outputFile = File(outputDir, safeName)
-                FileOutputStream(outputFile).use { it.write(decryptedFileBytes) }
+                try {
+                    contentResolver.openOutputStream(uri)?.use { fileOutputStream ->
+                        val fileCipher = Cipher.getInstance("AES/GCM/NoPadding")
+                        fileCipher.init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
+
+                        val encryptedFileSize = (fileSize + 16).toInt()
+                        val buffer = ByteArray(1024)
+                        var totalBytesReceived = 0L
+                        
+                        while (totalBytesReceived < encryptedFileSize) {
+                            val toRead = Integer.min(buffer.size, (encryptedFileSize - totalBytesReceived).toInt())
+                            dataInputStream.readFully(buffer, 0, toRead)
+                            
+                            val output = fileCipher.update(buffer, 0, toRead)
+                            if (output != null) {
+                                fileOutputStream.write(output)
+                            }
+                            totalBytesReceived += toRead
+                            onProgress(fileName, Long.min(totalBytesReceived, fileSize), fileSize)
+                        }
+                        
+                        val finalOutput = fileCipher.doFinal()
+                        if (finalOutput != null) {
+                            fileOutputStream.write(finalOutput)
+                        }
+                    }
+                } catch (e: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    throw e
+                }
                 
                 onProgress(fileName, fileSize, fileSize)
             }
             socket.close()
+        }.onFailure { e ->
+            Log.e("FileTransferManager", "Transfer error", e)
         }.also {
             serverSocket.close()
         }

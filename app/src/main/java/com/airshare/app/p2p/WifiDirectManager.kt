@@ -71,4 +71,10 @@ class WifiDirectManager(
             override fun onFailure(reason: Int) {}
         })
     }
+
+    fun cleanup() {
+        manager?.removeGroup(channel, null)
+        manager?.cancelConnect(channel, null)
+        manager?.stopPeerDiscovery(channel, null)
+    }
 }
