@@ -13,7 +13,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.Animatable
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -40,6 +39,8 @@ import com.airshare.app.service.AirShareService
 import com.airshare.app.ui.AirDropOverlay
 import com.airshare.app.ui.RadarView
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
@@ -187,10 +188,10 @@ class MainActivity : ComponentActivity() {
     private fun simulateTransfer() {
         // In a real app, this would be tied to airShareService.sendFiles()
         // Here we simulate the progress for UI demonstration
-        kotlinx.coroutines.MainScope().launch {
+        MainScope().launch {
             transferProgress = 0f
             for (i in 1..100) {
-                kotlinx.coroutines.delay(30)
+                delay(30)
                 transferProgress = i / 100f
             }
             transferProgress = null
@@ -257,7 +258,7 @@ fun SuccessAnimation(onComplete: () -> Unit) {
             animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
         )
         scale.animateTo(1f)
-        kotlinx.coroutines.delay(2000)
+        delay(2000)
         onComplete()
     }
 
@@ -274,8 +275,8 @@ fun SuccessAnimation(onComplete: () -> Unit) {
                 .background(Color(0xFF34C759), RoundedCornerShape(60.dp)),
             contentAlignment = Alignment.Center
         ) {
-            androidx.compose.material3.Icon(
-                imageVector = androidx.compose.material.icons.Icons.Default.Check,
+            Icon(
+                imageVector = Icons.Default.Check,
                 contentDescription = "Success",
                 tint = Color.White,
                 modifier = Modifier.size(64.dp)
