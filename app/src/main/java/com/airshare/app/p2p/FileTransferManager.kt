@@ -23,10 +23,25 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.OAEPParameterSpec
 import javax.crypto.spec.PSource
 import javax.crypto.spec.SecretKeySpec
+import java.security.MessageDigest
+import java.io.FileDescriptor
+import java.io.FileInputStream
 import java.security.spec.MGF1ParameterSpec
 import kotlin.math.min
 
 class FileTransferManager {
+
+    private fun calculateHash(fileDescriptor: FileDescriptor): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(fileDescriptor).use { input ->
+            val buffer = ByteArray(8192)
+            var bytesRead: Int
+            while (input.read(buffer).also { bytesRead = it } != -1) {
+                digest.update(buffer, 0, bytesRead)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private val PORT = 8888
     private val SOCKET_TIMEOUT = 10000 // 10 seconds
@@ -80,8 +95,10 @@ class FileTransferManager {
                     put("fileSize", fileSize)
                     put("mimeType", contentResolver.getType(uri) ?: "application/octet-stream")
                     // Calculate hash for integrity
-                    val hashInputStream = contentResolver.openInputStream(uri)
-                    put("sha256", hashInputStream?.use { calculateHash(it) } ?: "")
+                    val hash = contentResolver.openFileDescriptor(uri, "r")?.use { 
+                        calculateHash(it.fileDescriptor)
+                    } ?: ""
+                    put("sha256", hash)
                 }
                 
                 val (iv, encryptedMetadata) = encryptWithGCM(metadataJson.toString().toByteArray(), sessionKey)
@@ -248,8 +265,9 @@ class FileTransferManager {
                         }
 
                         // Verify integrity
-                        val verificationStream = contentResolver.openInputStream(uri)
-                        val actualHash = verificationStream?.use { calculateHash(it) }
+                        val actualHash = contentResolver.openFileDescriptor(uri, "r")?.use { 
+                            calculateHash(it.fileDescriptor)
+                        }
                         if (expectedHash.isNotEmpty() && actualHash != expectedHash) {
                             throw IOException("Hash verification failed for $fileName")
                         }
