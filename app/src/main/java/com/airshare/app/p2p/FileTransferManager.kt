@@ -6,6 +6,9 @@ import android.provider.OpenableColumns
 import android.content.ContentValues
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.*
 import java.net.InetSocketAddress
@@ -21,6 +24,7 @@ import javax.crypto.spec.OAEPParameterSpec
 import javax.crypto.spec.PSource
 import javax.crypto.spec.SecretKeySpec
 import java.security.spec.MGF1ParameterSpec
+import kotlin.math.min
 
 class FileTransferManager {
 
@@ -203,10 +207,11 @@ class FileTransferManager {
                 val fileIV = ByteArray(fileIVSize)
                 dataInputStream.readFully(fileIV)
 
+                // MediaStore API for Android 11+ compatibility
                 val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, safeName)
-                    put(MediaStore.Downloads.MIME_TYPE, mimeType)
-                    put(MediaStore.Downloads.RELATIVE_PATH, "Download/AirShare/")
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AirShare")
                 }
 
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -222,7 +227,7 @@ class FileTransferManager {
                         var totalBytesReceived = 0L
                         
                         while (totalBytesReceived < encryptedFileSize) {
-                            val toRead = Integer.min(buffer.size, (encryptedFileSize - totalBytesReceived).toInt())
+                            val toRead = min(buffer.size.toLong(), encryptedFileSize - totalBytesReceived).toInt()
                             dataInputStream.readFully(buffer, 0, toRead)
                             
                             val output = fileCipher.update(buffer, 0, toRead)
@@ -230,7 +235,7 @@ class FileTransferManager {
                                 fileOutputStream.write(output)
                             }
                             totalBytesReceived += toRead
-                            onProgress(fileName, Long.min(totalBytesReceived, fileSize), fileSize)
+                            onProgress(fileName, min(totalBytesReceived, fileSize), fileSize)
                         }
                         
                         val finalOutput = fileCipher.doFinal()

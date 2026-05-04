@@ -234,8 +234,15 @@ class MainActivity : ComponentActivity() {
                                 TransferProgressIndicator(state.progress)
                             }
                             is TransferState.Success -> {
-                                SuccessAnimation { 
-                                    // Reset state after success animation
+                                var showSuccess by remember { mutableStateOf(true) }
+                                if (showSuccess) {
+                                    SuccessAnimation { 
+                                        showSuccess = false
+                                        // Reset dismissed peer id to allow new triggers
+                                        dismissedPeerId = null
+                                        manualPeer = null
+                                        isSenderMode = false
+                                    }
                                 }
                             }
                             is TransferState.Error -> {
@@ -248,6 +255,14 @@ class MainActivity : ComponentActivity() {
             }
         }
         checkAndRequestPermissions()
+    }
+
+    override fun onDestroy() {
+        if (isBound) {
+            unbindService(serviceConnection)
+            isBound = false
+        }
+        super.onDestroy()
     }
 
     private fun getFileName(uri: android.net.Uri): String {
