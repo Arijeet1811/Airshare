@@ -70,7 +70,8 @@ class MainActivity : ComponentActivity() {
     ) { permissions ->
         val allGranted = permissions.entries.all { it.value }
         if (allGranted) {
-            // Service will be started by user button
+            startAirShareService()
+            Toast.makeText(this, "AirShare is now active", Toast.LENGTH_SHORT).show()
         } else {
             Toast.makeText(this, "Permissions required for AirShare", Toast.LENGTH_LONG).show()
         }
