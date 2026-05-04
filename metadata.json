@@ -1,0 +1,6 @@
+{
+  "name": "AirShare",
+  "description": "Secure, high-speed P2P file-sharing app with BLE discovery and Wi-Fi Direct.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
