@@ -4,6 +4,9 @@ import android.content.Context
 import android.net.wifi.p2p.*
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class WifiDirectManager(
     private val context: Context,
@@ -11,6 +14,28 @@ class WifiDirectManager(
 ) {
     private val manager: WifiP2pManager? = context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
     private val channel: WifiP2pManager.Channel? = manager?.initialize(context, Looper.getMainLooper(), null)
+
+    private val _discoveredWifiDevices = MutableStateFlow<List<WifiP2pDevice>>(emptyList())
+    val discoveredWifiDevices: StateFlow<List<WifiP2pDevice>> = _discoveredWifiDevices.asStateFlow()
+
+    fun initiateDiscovery() {
+        manager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                Log.d("WifiDirect", "Discovery initiated")
+                requestPeers()
+            }
+
+            override fun onFailure(reason: Int) {
+                Log.e("WifiDirect", "Discovery failed: $reason")
+            }
+        })
+    }
+
+    private fun requestPeers() {
+        manager?.requestPeers(channel) { peersList ->
+            _discoveredWifiDevices.value = peersList.deviceList.toList()
+        }
+    }
 
     fun connect(device: WifiP2pDevice) {
         val config = WifiP2pConfig().apply {

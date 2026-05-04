@@ -14,13 +14,20 @@ import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
 import com.airshare.app.model.Peer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
-class BleManager(private val context: Context) {
+class BleManager(
+    private val context: Context,
+    private val onProximityDetected: (Peer) -> Unit
+) {
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val adapter: BluetoothAdapter? = bluetoothManager.adapter
@@ -32,6 +39,7 @@ class BleManager(private val context: Context) {
 
     private val SERVICE_UUID = UUID.fromString("0000feaa-0000-1000-8000-00805f9b34fb") // AirShare Service UUID
     private val PROXIMITY_THRESHOLD = -65 // RSSI threshold for "close" proximity
+    private val managerScope = CoroutineScope(Dispatchers.Main)
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -40,12 +48,20 @@ class BleManager(private val context: Context) {
             val rssi = result.rssi
             val isClose = rssi > PROXIMITY_THRESHOLD
 
+            val existingPeer = _discoveredPeers.value.find { it.id == device.address }
+            val wasAlreadyTriggered = existingPeer?.isProximityTriggered ?: false
+
             val newPeer = Peer(
                 id = device.address,
                 name = deviceName,
                 rssi = rssi,
-                isProximityTriggered = isClose
+                isProximityTriggered = isClose,
+                lastSeenMs = System.currentTimeMillis()
             )
+
+            if (isClose && !wasAlreadyTriggered) {
+                onProximityDetected(newPeer)
+            }
 
             updatePeers(newPeer)
         }
@@ -81,6 +97,18 @@ class BleManager(private val context: Context) {
 
         startAdvertising()
         startScanning()
+
+        managerScope.launch {
+            while (true) {
+                delay(5000)
+                val currentTime = System.currentTimeMillis()
+                val currentList = _discoveredPeers.value
+                val filteredList = currentList.filter { currentTime - it.lastSeenMs < 10000 }
+                if (filteredList.size != currentList.size) {
+                    _discoveredPeers.value = filteredList
+                }
+            }
+        }
     }
 
     private fun startAdvertising() {

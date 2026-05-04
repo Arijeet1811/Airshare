@@ -15,13 +15,17 @@ import com.airshare.app.R
 
 import com.airshare.app.ble.BleManager
 import com.airshare.app.model.Peer
+import com.airshare.app.model.TransferState
 import com.airshare.app.p2p.FileTransferManager
 import com.airshare.app.p2p.WifiDirectManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import android.net.Uri
 import java.io.File
 
 class AirShareService : Service() {
@@ -31,6 +35,10 @@ class AirShareService : Service() {
     private lateinit var wifiDirectManager: WifiDirectManager
     private val transferManager = FileTransferManager()
     
+    private var pendingFiles: List<Pair<Uri, String>> = emptyList()
+    private val _transferState = MutableStateFlow<TransferState>(TransferState.Idle)
+    val transferState: StateFlow<TransferState> = _transferState.asStateFlow()
+
     private val serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
 
@@ -43,19 +51,58 @@ class AirShareService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        bleManager = BleManager(this)
+        bleManager = BleManager(this) { peer ->
+            // Proximity detected, initiate WiFi Direct discovery
+            wifiDirectManager.initiateDiscovery()
+        }
         wifiDirectManager = WifiDirectManager(this) { info ->
-            // In a real flow, this handles the host IP for socket connection
-            if (!info.isGroupOwner) {
-                // We are the client, wait for host to be ready then send?
+            if (info.groupFormed && !info.isGroupOwner) {
+                val targetHost = info.groupOwnerAddress.hostAddress
+                if (pendingFiles.isNotEmpty()) {
+                    sendFiles(targetHost, pendingFiles)
+                }
             }
         }
     }
 
-    fun sendFiles(host: String, files: List<File>) {
+    fun setPendingFiles(files: List<Pair<Uri, String>>) {
+        pendingFiles = files
+    }
+
+    fun startReceiving() {
         serviceScope.launch {
-            transferManager.sendFiles(host, files) { index, sent, total ->
-                updateNotification("Sending file ${index + 1}: ${(sent * 100 / total)}%")
+            val outputDir = File(getExternalFilesDir(null), "AirShareReceived")
+            if (!outputDir.exists()) outputDir.mkdirs()
+
+            while (isRunning) {
+                transferManager.receiveFiles(outputDir) { fileName, progress, total ->
+                    _transferState.value = TransferState.Transferring(progress.toFloat() / total, fileName)
+                    updateNotification("Receiving $fileName: ${(progress * 100 / total)}%")
+                }.onSuccess {
+                    _transferState.value = TransferState.Success
+                    updateNotification("Received completed")
+                }.onFailure { e ->
+                    _transferState.value = TransferState.Error(e.message ?: "Receive failed")
+                    updateNotification("Receive error: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun sendFiles(host: String, files: List<Pair<Uri, String>>) {
+        serviceScope.launch {
+            _transferState.value = TransferState.Transferring(0f, "Starting...")
+            val result = transferManager.sendFiles(host, contentResolver, files) { index, sent, total ->
+                val progress = sent.toFloat() / total
+                _transferState.value = TransferState.Transferring(progress, files[index].second)
+                updateNotification("Sending file ${index + 1}: ${(progress * 100).toInt()}%")
+            }
+            result.onSuccess {
+                _transferState.value = TransferState.Success
+                updateNotification("Files sent successfully!")
+            }.onFailure { e ->
+                _transferState.value = TransferState.Error(e.message ?: "Send failed")
+                updateNotification("Failed to send files: ${e.message}")
             }
         }
     }
@@ -69,6 +116,7 @@ class AirShareService : Service() {
         isRunning = true
         startForegroundService()
         bleManager.startDiscovery()
+        startReceiving()
         return START_STICKY
     }
 

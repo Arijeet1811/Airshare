@@ -1,21 +1,27 @@
 package com.airshare.app.ui
 
+import android.graphics.Paint
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.airshare.app.model.Peer
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 @Composable
 fun RadarView(
     peers: List<Peer>,
+    onPeerTapped: (Peer) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "RadarPulse")
@@ -39,7 +45,41 @@ fun RadarView(
         ), label = "pulse2"
     )
 
-    Canvas(modifier = modifier.fillMaxSize()) {
+    val paint = remember {
+        Paint().apply {
+            color = android.graphics.Color.WHITE
+            textAlign = Paint.Align.CENTER
+            textSize = 28f
+            isAntiAlias = true
+        }
+    }
+
+    Canvas(
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(peers) {
+                detectTapGestures { offset ->
+                    val width = size.width
+                    val height = size.height
+                    val center = Offset(width / 2f, height / 2f)
+                    val maxRadius = Math.min(width, height) / 2.5f
+
+                    peers.forEachIndexed { index, peer ->
+                        val angle = (index * 137.5f) * (Math.PI / 180f)
+                        val normalizedRssi = (peer.rssi.coerceIn(-100, -30) + 100) / 70f
+                        val radius = maxRadius * (1f - normalizedRssi * 0.8f).coerceIn(0.2f, 0.9f)
+                        
+                        val px = center.x + radius * cos(angle).toFloat()
+                        val py = center.y + radius * sin(angle).toFloat()
+
+                        val distance = sqrt((offset.x - px) * (offset.x - px) + (offset.y - py) * (offset.y - py))
+                        if (distance <= 30.dp.toPx()) {
+                            onPeerTapped(peer)
+                        }
+                    }
+                }
+            }
+    ) {
         val center = Offset(size.width / 2, size.height / 2)
         val maxRadius = size.minDimension / 2.5f
 
@@ -99,6 +139,14 @@ fun RadarView(
                 color = Color.Green,
                 radius = 6.dp.toPx(),
                 center = Offset(x, y)
+            )
+            
+            // Draw name below dot
+            drawContext.canvas.nativeCanvas.drawText(
+                peer.name,
+                x,
+                y + 22 + 6.dp.toPx(), // Adjust Y: 22px below dot center plus radius
+                paint
             )
             
             // Halo for triggered peers

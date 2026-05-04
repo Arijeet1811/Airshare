@@ -20,6 +20,7 @@ import com.airshare.app.model.Peer
 @Composable
 fun AirDropOverlay(
     peer: Peer?,
+    isSender: Boolean = false,
     onDismiss: () -> Unit,
     onAccept: (Peer) -> Unit
 ) {
@@ -64,33 +65,50 @@ fun AirDropOverlay(
                         )
 
                         Text(
-                            text = "would like to share files",
+                            text = if (isSender) "Waiting for response..." else "would like to share files",
                             color = Color.Gray,
                             fontSize = 14.sp
                         )
 
                         Spacer(modifier = Modifier.height(24.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Button(
-                                onClick = onDismiss,
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Decline")
+                        if (isSender) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                color = Color.White,
+                                strokeWidth = 3.dp
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Waiting for ${peer.name} to accept...",
+                                color = Color.Gray,
+                                fontSize = 13.sp
+                            )
+                            TextButton(onClick = onDismiss) {
+                                Text("Cancel", color = Color.Red.copy(alpha = 0.8f))
                             }
-
-                            Button(
-                                onClick = { onAccept(peer) },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
-                                shape = RoundedCornerShape(12.dp)
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Text("Accept", color = Color.White)
+                                Button(
+                                    onClick = onDismiss,
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Decline")
+                                }
+
+                                Button(
+                                    onClick = { onAccept(peer) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Accept", color = Color.White)
+                                }
                             }
                         }
                     }
