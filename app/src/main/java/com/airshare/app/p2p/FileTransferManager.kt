@@ -19,7 +19,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.OAEPParameterSpec
 import javax.crypto.spec.PSource
 import javax.crypto.spec.SecretKeySpec
-import javax.crypto.spec.MGF1ParameterSpec
+import java.security.spec.MGF1ParameterSpec
 
 class FileTransferManager {
 

@@ -1,4 +1,5 @@
 package com.airshare.app
+import com.airshare.app.model.TransferState
 
 import android.Manifest
 import android.content.ComponentName
