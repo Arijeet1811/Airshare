@@ -1,7 +1,7 @@
 plugins {
-    alias(libs.plugins.androidApplication)
-    alias(libs.plugins.kotlinAndroid)
-    alias(libs.plugins.composeCompiler)
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.compose.compiler)
 }
 
 android {
@@ -40,27 +40,27 @@ android {
 }
 
 dependencies {
-    implementation(libs.androidxCoreKtx)
-    implementation(libs.androidxLifecycleRuntimeKtx)
-    implementation(libs.androidxActivityCompose)
-    implementation(libs.androidxNavigationCompose)
-    implementation(platform(libs.androidxComposeBom))
-    implementation(libs.androidxUi)
-    implementation(libs.androidxUiGraphics)
-    implementation(libs.androidxUiToolingPreview)
-    implementation(libs.androidxMaterial3)
-    implementation(libs.androidxAnimation)
-    implementation(libs.androidxMaterialIconsExtended)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.navigation.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.animation)
+    implementation(libs.androidx.material.icons.extended)
     
     // Animations & Networking
-    implementation(libs.lottieCompose)
-    implementation(libs.kotlinxCoroutinesAndroid)
+    implementation(libs.lottie.compose)
+    implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
-    androidTestImplementation(libs.androidxJunit)
-    androidTestImplementation(libs.androidxEspressoCore)
-    androidTestImplementation(platform(libs.androidxComposeBom))
-    androidTestImplementation(libs.androidxUiTestJunit4)
-    debugImplementation(libs.androidxUiTooling)
-    debugImplementation(libs.androidxUiTestManifest)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.test.manifest)
 }
