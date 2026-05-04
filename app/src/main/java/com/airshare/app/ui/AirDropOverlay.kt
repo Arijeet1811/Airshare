@@ -3,6 +3,7 @@ package com.airshare.app.ui
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -127,13 +128,15 @@ fun SeaWaveAnimation() {
                     repeatMode = RepeatMode.Reverse
                 ), label = "WaveScale"
             )
-            androidx.compose.foundation.border(
-                width = 2.dp,
-                color = Color(0xFF007AFF).copy(alpha = 1f - (scale - 0.5f)),
-                shape = RoundedCornerShape(16.dp)
-            ).let {
-                Box(modifier = Modifier.size(64.dp * scale).then(it))
-            }
+            Box(
+                modifier = Modifier
+                    .size(64.dp * scale)
+                    .border(
+                        width = 2.dp,
+                        color = Color(0xFF007AFF).copy(alpha = 1f - (scale - 0.5f)),
+                        shape = RoundedCornerShape(16.dp)
+                    )
+            )
         }
     }
 }

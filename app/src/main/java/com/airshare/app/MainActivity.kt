@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            add(Manifest.permission.FOREGROUND_SERVICE_NEARBY_DEVICE)
+            add(Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE)
         }
         
         add(Manifest.permission.NEARBY_WIFI_DEVICES)
