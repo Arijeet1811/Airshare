@@ -40,7 +40,7 @@
             android:name=".service.AirShareService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="nearbyDevice" />
+            android:foregroundServiceType="connected_device" />
 
         <activity
             android:name=".MainActivity"

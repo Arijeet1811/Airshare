@@ -78,7 +78,14 @@ class AirShareService : Service() {
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // Specify foreground service type for Android 10+
-            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NEARBY_DEVICE)
+            // We use CONNECTED_DEVICE as required for Bluetooth/Wi-Fi P2P communication
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                // For Android 14+, we can also include NEARBY_DEVICE if we wanted, but let's stick to the requested change.
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            } else {
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            }
+            startForeground(NOTIFICATION_ID, notification, type)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
