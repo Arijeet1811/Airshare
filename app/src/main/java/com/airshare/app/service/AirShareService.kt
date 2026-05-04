@@ -61,6 +61,12 @@ class AirShareService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            stopForeground(true)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        isRunning = true
         startForegroundService()
         bleManager.startDiscovery()
         return START_STICKY
@@ -69,6 +75,7 @@ class AirShareService : Service() {
     fun getDiscoveredPeers(): StateFlow<List<Peer>> = bleManager.discoveredPeers
 
     override fun onDestroy() {
+        isRunning = false
         bleManager.stopDiscovery()
         super.onDestroy()
     }
@@ -102,7 +109,8 @@ class AirShareService : Service() {
             .setSmallIcon(android.R.drawable.stat_sys_download) // Use a system icon for now
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MAX) // High priority for better visibility
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
     }
 
@@ -111,8 +119,9 @@ class AirShareService : Service() {
             val serviceChannel = NotificationChannel(
                 CHANNEL_ID,
                 "AirShare Service Channel",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_HIGH // High importance for visibility
             )
+            serviceChannel.description = "Required for AirShare background features"
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(serviceChannel)
         }
@@ -126,5 +135,10 @@ class AirShareService : Service() {
     companion object {
         private const val CHANNEL_ID = "AirShareServiceChannel"
         private const val NOTIFICATION_ID = 1
+        const val ACTION_STOP = "com.airshare.app.service.STOP"
+        
+        @Volatile
+        var isRunning = false
+            private set
     }
 }

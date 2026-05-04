@@ -64,7 +64,9 @@ class MainActivity : ComponentActivity() {
             add(Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE)
         }
         
-        add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
     }
 
     private val permissionLauncher = registerForActivityResult(
@@ -72,7 +74,7 @@ class MainActivity : ComponentActivity() {
     ) { permissions ->
         val allGranted = permissions.entries.all { it.value }
         if (allGranted) {
-            startAirShareService()
+            // Service will be started by user button
         } else {
             Toast.makeText(this, "Permissions required for AirShare", Toast.LENGTH_LONG).show()
         }
@@ -144,11 +146,33 @@ class MainActivity : ComponentActivity() {
                         RadarView(peers = peers)
 
                         // File Selection Button
-                        Box(
+                        Column(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = 60.dp)
+                                .padding(bottom = 60.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
+                            var serviceRunning by remember { mutableStateOf(AirShareService.isRunning) }
+                            
+                            // Background Service Toggle
+                            Button(
+                                onClick = {
+                                    if (AirShareService.isRunning) {
+                                        stopAirShareService()
+                                    } else {
+                                        startAirShareService()
+                                    }
+                                    serviceRunning = !serviceRunning
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (serviceRunning) Color(0xFF34C759) else Color(0xFF007AFF)
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            ) {
+                                Text(if (serviceRunning) "Service: ON" else "Start Background Service", color = Color.White)
+                            }
+
                             Button(
                                 onClick = { filePickerLauncher.launch("*/*") },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
@@ -220,6 +244,13 @@ class MainActivity : ComponentActivity() {
         } else {
             startService(intent)
         }
+    }
+
+    private fun stopAirShareService() {
+        val intent = Intent(this, AirShareService::class.java).apply {
+            action = AirShareService.ACTION_STOP
+        }
+        startService(intent)
     }
 }
 
