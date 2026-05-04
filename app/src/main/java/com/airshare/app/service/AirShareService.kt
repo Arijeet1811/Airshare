@@ -77,10 +77,8 @@ class AirShareService : Service() {
         val notification = createNotification("Searching for nearby devices...")
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10+ requires foregroundServiceType for nearby devices
-            // But Android 14+ is stricter, and 15 (Target 35) is even more so.
-            // We defined 'nearbyDevice' in manifest.
-            startForeground(NOTIFICATION_ID, notification)
+            // Specify foreground service type for Android 10+
+            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NEARBY_DEVICE)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
