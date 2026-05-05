@@ -68,13 +68,30 @@ class AirShareService : Service() {
         bleManager = BleManager(this) { peer ->
             wifiDirectManager.initiateDiscovery()
             serviceScope.launch(Dispatchers.IO) {
-                kotlinx.coroutines.delay(2000)
-                val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
-                val matchedDevice = wifiDevices.find { it.deviceName == peer.name }
-                if (matchedDevice != null) {
-                    wifiDirectManager.connect(matchedDevice)
-                } else {
-                    android.util.Log.w("AirShareService", "No WiFi Direct device matched BLE peer: ${peer.name}")
+                // Retry loop: try to match and connect up to 5 times with 2s gap
+                var connected = false
+                repeat(5) { attempt ->
+                    if (connected) return@repeat
+                    kotlinx.coroutines.delay(2000)
+                    val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
+                    val matchedDevice = wifiDevices.find { 
+                        it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true) 
+                    }
+                    if (matchedDevice != null) {
+                        android.util.Log.d("AirShareService", 
+                            "Matched on attempt ${attempt + 1}: ${peer.name}")
+                        wifiDirectManager.connect(matchedDevice)
+                        connected = true
+                    } else {
+                        android.util.Log.w("AirShareService", 
+                            "Attempt ${attempt + 1}: no match for ${peer.name}, retrying...")
+                        // Re-trigger discovery on each retry
+                        wifiDirectManager.initiateDiscovery()
+                    }
+                }
+                if (!connected) {
+                    android.util.Log.e("AirShareService", 
+                        "Failed to match WiFi Direct device for BLE peer: ${peer.name}")
                 }
             }
         }

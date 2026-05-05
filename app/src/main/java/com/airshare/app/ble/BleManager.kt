@@ -168,11 +168,17 @@ class BleManager(
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
+        val deviceName = adapter?.name?.take(8) ?: "AirShare"
         val data = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .setIncludeDeviceName(true)
             .build()
 
-        advertiser?.startAdvertising(settings, data, advertiseCallback)
+        val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(true)
+            .build()
+
+        advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
         isAdvertising = true
     }
 

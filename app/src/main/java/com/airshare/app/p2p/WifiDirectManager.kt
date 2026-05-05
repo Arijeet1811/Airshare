@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.net.NetworkInfo
 import android.net.wifi.p2p.*
 import android.os.Looper
 import android.util.Log
@@ -67,13 +66,17 @@ class WifiDirectManager(
                     requestPeers()
                 }
                 WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
-                    val networkInfo = intent.getParcelableExtra<NetworkInfo>(WifiP2pManager.EXTRA_NETWORK_INFO)
-                    if (networkInfo?.isConnected == true) {
-                        Log.d("WifiDirect", "Connected to P2P network, requesting info")
+                    val p2pInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_INFO, WifiP2pInfo::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra<WifiP2pInfo>(WifiP2pManager.EXTRA_WIFI_P2P_INFO)
+                    }
+                    if (p2pInfo?.groupFormed == true) {
+                        Log.d("WifiDirect", "P2P group formed, requesting connection info")
                         requestConnectionInfo()
                     } else {
-                        Log.d("WifiDirect", "Disconnected from P2P network")
-                        // State handled by flow or onConnectionInfoAvailable if needed
+                        Log.d("WifiDirect", "P2P group dissolved or not formed")
                     }
                 }
                 WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
