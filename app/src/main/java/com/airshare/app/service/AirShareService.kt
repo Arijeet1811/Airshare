@@ -66,6 +66,22 @@ class AirShareService : Service() {
                 }
             }
         }
+
+        // Auto-update notification based on state
+        serviceScope.launch {
+            _transferState.collect { state ->
+                when (state) {
+                    is TransferState.Idle -> updateNotification("Searching for nearby devices...")
+                    is TransferState.Transferring -> {
+                        val percent = (state.progress * 100).toInt()
+                        updateNotification("${state.fileName}: $percent%")
+                    }
+                    is TransferState.Success -> updateNotification("Transfer successful!")
+                    is TransferState.Error -> updateNotification("Error: ${state.message}")
+                    is TransferState.Request -> updateNotification("Incoming request: ${state.fileName}")
+                }
+            }
+        }
     }
 
     fun setPendingFiles(files: List<Pair<Uri, String>>) {
@@ -88,14 +104,11 @@ class AirShareService : Service() {
                     },
                     onProgress = { fileName, progress, total ->
                         _transferState.value = TransferState.Transferring(progress.toFloat() / total, fileName)
-                        updateNotification("Receiving $fileName: ${(progress * 100 / (if(total == 0L) 1L else total))}%")
                     }
                 ).onSuccess {
                     _transferState.value = TransferState.Success
-                    updateNotification("Received completed")
                 }.onFailure { e ->
                     _transferState.value = TransferState.Error(e.message ?: "Receive failed")
-                    updateNotification("Receive error")
                 }
             }
         }
@@ -114,19 +127,15 @@ class AirShareService : Service() {
                 val result = transferManager.sendFiles(host, contentResolver, files) { index, sent, total ->
                     val progress = sent.toFloat() / (if(total == 0L) 1L else total)
                     _transferState.value = TransferState.Transferring(progress, files[index].second)
-                    updateNotification("Sending file ${index + 1}: ${(progress * 100).toInt()}%")
                 }
                 
                 result.onSuccess {
                     _transferState.value = TransferState.Success
-                    updateNotification("Files sent successfully!")
                     success = true
                 }.onFailure { e ->
                     if (attempt == maxAttempts) {
                         _transferState.value = TransferState.Error(e.message ?: "Send failed")
-                        updateNotification("Failed to send files")
                     } else {
-                        updateNotification("Retrying send (Attempt $attempt)...")
                         kotlinx.coroutines.delay(2000)
                     }
                 }
@@ -177,14 +186,20 @@ class AirShareService : Service() {
             PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE)
         }
 
+        val stopIntent = Intent(this, AirShareService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val stopPendingIntent = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE)
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("AirShare Active")
+            .setContentTitle("AirShare")
             .setContentText(content)
-            .setSmallIcon(android.R.drawable.stat_sys_download) // Use a system icon for now
+            .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_MAX) // High priority for better visibility
+            .setPriority(NotificationCompat.PRIORITY_LOW) // Use LOW for normal active service to be less intrusive
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop Service", stopPendingIntent)
             .build()
     }
 

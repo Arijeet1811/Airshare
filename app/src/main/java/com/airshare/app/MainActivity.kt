@@ -258,6 +258,12 @@ class MainActivity : ComponentActivity() {
         checkAndRequestPermissions()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Automatically resume discovery when user returns to the app
+        checkAndRequestPermissions()
+    }
+
     override fun onDestroy() {
         if (isBound) {
             unbindService(serviceConnection)
@@ -287,7 +293,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAndRequestPermissions() {
-        permissionLauncher.launch(permissionsToRequest.toTypedArray())
+        val allGranted = permissionsToRequest.all { 
+            androidx.core.content.ContextCompat.checkSelfPermission(this, it) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (allGranted) {
+            startAirShareService()
+        } else {
+            permissionLauncher.launch(permissionsToRequest.toTypedArray())
+        }
     }
 
     private fun startAirShareService() {

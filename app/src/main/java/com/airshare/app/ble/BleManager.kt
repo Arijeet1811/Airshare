@@ -40,9 +40,14 @@ class BleManager(
     private val SERVICE_UUID = UUID.fromString("0000feaa-0000-1000-8000-00805f9b34fb") // AirShare Service UUID
     private val PROXIMITY_THRESHOLD = -65 // RSSI threshold for "close" proximity
     private val managerScope = CoroutineScope(Dispatchers.Main)
+    
+    private var lastPeerFoundTime = System.currentTimeMillis()
+    private var isScanning = false
+    private var throttleJob: kotlinx.coroutines.Job? = null
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            lastPeerFoundTime = System.currentTimeMillis()
             val device = result.device
             val deviceName = result.scanRecord?.deviceName ?: device.address ?: "Unknown"
             val rssi = result.rssi
@@ -94,24 +99,68 @@ class BleManager(
 
     fun startDiscovery() {
         if (adapter == null || !adapter.isEnabled) return
+        
+        lastPeerFoundTime = System.currentTimeMillis()
+        throttleJob?.cancel()
+        throttleJob = managerScope.launch {
+            // Monitor peer list and cleanup
+            launch {
+                while (true) {
+                    delay(5000)
+                    val currentTime = System.currentTimeMillis()
+                    val currentList = _discoveredPeers.value
+                    val filteredList = currentList.filter { currentTime - it.lastSeenMs < 10000 }
+                    if (filteredList.size != currentList.size) {
+                        _discoveredPeers.value = filteredList
+                    }
+                }
+            }
 
-        startAdvertising()
-        startScanning()
-
-        managerScope.launch {
+            // Adaptive scanning and advertising logic
             while (true) {
-                delay(5000)
                 val currentTime = System.currentTimeMillis()
-                val currentList = _discoveredPeers.value
-                val filteredList = currentList.filter { currentTime - it.lastSeenMs < 10000 }
-                if (filteredList.size != currentList.size) {
-                    _discoveredPeers.value = filteredList
+                val timeSinceLastFound = currentTime - lastPeerFoundTime
+                
+                if (timeSinceLastFound > 5 * 60 * 1000) { // 5 minutes
+                    // Throttled mode: 5s active every 30s
+                    Log.d("BleManager", "Throttling BLE discovery due to inactivity")
+                    startDiscoveryPrerequisites()
+                    delay(5000)
+                    stopDiscoveryPrerequisites()
+                    delay(25000)
+                } else {
+                    // Continuous mode
+                    startDiscoveryPrerequisites()
+                    delay(10000)
                 }
             }
         }
     }
 
+    private fun startDiscoveryPrerequisites() {
+        startAdvertising()
+        startScanning()
+    }
+
+    private fun stopDiscoveryPrerequisites() {
+        if (isAdvertising) {
+            advertiser?.stopAdvertising(advertiseCallback)
+            isAdvertising = false
+        }
+        stopScanningOnly()
+    }
+
+    private fun stopScanningOnly() {
+        if (isScanning) {
+            scanner?.stopScan(scanCallback)
+            isScanning = false
+        }
+    }
+
+    private var isAdvertising = false
+
     private fun startAdvertising() {
+        if (isAdvertising) return
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
@@ -124,9 +173,11 @@ class BleManager(
             .build()
 
         advertiser?.startAdvertising(settings, data, advertiseCallback)
+        isAdvertising = true
     }
 
     private fun startScanning() {
+        if (isScanning) return
         val filter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
@@ -136,10 +187,11 @@ class BleManager(
             .build()
 
         scanner?.startScan(listOf(filter), settings, scanCallback)
+        isScanning = true
     }
 
     fun stopDiscovery() {
-        advertiser?.stopAdvertising(advertiseCallback)
-        scanner?.stopScan(scanCallback)
+        throttleJob?.cancel()
+        stopDiscoveryPrerequisites()
     }
 }
