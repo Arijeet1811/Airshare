@@ -7,7 +7,8 @@ plugins {
 android {
     namespace = "com.airshare.app"
     compileSdk = 35
-
+    buildToolsVersion = "35.0.0"
+    
     defaultConfig {
         applicationId = "com.airshare.app"
         minSdk = 24
