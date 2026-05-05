@@ -251,33 +251,40 @@ class BleManager(
             return
         }
 
-        // ✅ MAX POWER for fastest discovery
+        // 1. Configure High-Power, Low-Latency Settings for "Instant" feel
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
             .setTimeout(0)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)  // Max power
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH) // Maximum range/strength
             .build()
 
-        // Encode session ID as manufacturer data (max 12 bytes)
+        // Process the Session ID into byte format
         val idBytes = sessionId.take(12).chunked(2).mapNotNull {
             it.toIntOrNull(16)?.toByte()
         }.toByteArray()
 
+        // 2. Primary Advertising Data: Must stay under 31 bytes
         val data = AdvertiseData.Builder()
-            .addServiceUuid(ParcelUuid(SERVICE_UUID))
-            .setIncludeDeviceName(true)
-            .addManufacturerData(AIRSHARE_MANUFACTURER_ID, idBytes)
+            .addServiceUuid(ParcelUuid(SERVICE_UUID)) // Essential for filtering
+            .setIncludeTxPowerLevel(false) // Save space
             .build()
 
-        // Optional scan response data
+        // 3. Scan Response Data: Move heavy items here
         val scanResponse = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
+            .setIncludeDeviceName(true) // User-friendly name
+            .addManufacturerData(AIRSHARE_MANUFACTURER_ID, idBytes) // AirShare specific ID
             .build()
 
-        adapter?.bluetoothLeAdvertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
+        // Start the broadcast
+        adapter?.bluetoothLeAdvertiser?.startAdvertising(
+            settings, 
+            data, 
+            scanResponse, 
+            advertiseCallback
+        )
         isAdvertising = true
-        LogUtil.d("BleManager", "Advertising started (device: ${adapter?.name})")
+        LogUtil.d("BleManager", "Advertising started successfully with split payloads")
     }
 
     private fun startScanning() {
