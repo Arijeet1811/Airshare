@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.*
@@ -175,13 +176,18 @@ class FileTransferManager {
 
                 socket.soTimeout = SOCKET_TIMEOUT
 
-                // Handle in separate coroutine
+                // Handle each connection in separate coroutine
                 scope.launch(Dispatchers.IO) {
                     try {
-                        handleIncomingTransfer(socket, contentResolver, onReceiveRequest, onProgress)
+                        handleIncomingTransfer(
+                            socket, 
+                            contentResolver, 
+                            onReceiveRequest, 
+                            onProgress
+                        )
                         onTransferComplete()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error handling transfer", e)
+                        Log.e(TAG, "Error in transfer handling", e)
                     }
                 }
             }
