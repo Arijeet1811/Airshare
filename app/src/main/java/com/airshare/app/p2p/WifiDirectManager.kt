@@ -110,9 +110,14 @@ class WifiDirectManager(
     }
 
     private fun performConnect(device: WifiP2pDevice) {
+        val myId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: ""
+        // Tie-breaker: If my ID hash is higher, I intend to be the group owner.
+        // This avoids both devices trying to be clients or both trying to be owners.
+        val intentValue = if (myId.hashCode() > device.deviceAddress.hashCode()) 15 else 0
+
         val config = WifiP2pConfig().apply {
             deviceAddress = device.deviceAddress
-            groupOwnerIntent = 0
+            groupOwnerIntent = intentValue
         }
 
         manager?.connect(channel, config, object : WifiP2pManager.ActionListener {

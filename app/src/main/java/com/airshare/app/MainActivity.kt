@@ -35,10 +35,15 @@ import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.platform.LocalContext
+import android.provider.Settings
+import android.os.PowerManager
+import android.net.ConnectivityManager
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.systemBars
 import com.airshare.app.model.Peer
 import com.airshare.app.model.TransferState
 import com.airshare.app.service.AirShareService
@@ -66,6 +71,13 @@ class MainActivity : ComponentActivity() {
             add(Manifest.permission.BLUETOOTH_CONNECT)
             add(Manifest.permission.NEARBY_WIFI_DEVICES)
             add(Manifest.permission.POST_NOTIFICATIONS)
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+                // Note: READ_MEDIA_IMAGES and READ_MEDIA_VIDEO are also often needed alongside partial access
+                add(Manifest.permission.READ_MEDIA_IMAGES)
+                add(Manifest.permission.READ_MEDIA_VIDEO)
+            }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             add(Manifest.permission.BLUETOOTH_SCAN)
             add(Manifest.permission.BLUETOOTH_ADVERTISE)
@@ -124,9 +136,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private val filePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.GetMultipleContents()
+        ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNotEmpty()) {
+            uris.forEach { uri ->
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (e: Exception) {
+                    LogUtil.w("MainActivity", "Could not take persistable permission for $uri")
+                }
+            }
             selectedUris = uris
             Toast.makeText(this, "Selected ${uris.size} files", Toast.LENGTH_SHORT).show()
         }
@@ -175,11 +197,12 @@ class MainActivity : ComponentActivity() {
                         contentAlignment = Alignment.Center
                     ) {
                         // Branding Header
+                        val topPadding = WindowInsets.systemBars.asPaddingValues().calculateTopPadding()
                         Row(
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
                                 .fillMaxWidth()
-                                .padding(top = 64.dp, start = 32.dp, end = 32.dp),
+                                .padding(top = topPadding + 16.dp, start = 32.dp, end = 32.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -237,12 +260,15 @@ class MainActivity : ComponentActivity() {
                         )
 
                         // Bottom Controls
+                        val bottomPadding = WindowInsets.systemBars.asPaddingValues().calculateBottomPadding()
                         Column(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = 60.dp, start = 24.dp, end = 24.dp),
+                                .padding(bottom = bottomPadding + 24.dp, start = 24.dp, end = 24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
+                            BatteryDataSaverPrompt()
+                            Spacer(modifier = Modifier.height(16.dp))
                             Surface(
                                 modifier = Modifier.fillMaxWidth(0.85f),
                                 color = Color.White.copy(alpha = 0.05f),
@@ -439,7 +465,51 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() {
+    @Composable
+    private fun BatteryDataSaverPrompt() {
+        val context = LocalContext.current
+        val isOptimized = remember {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            !pm.isIgnoringBatteryOptimizations(context.packageName)
+        }
+        
+        val isDataRestricted = remember {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                cm.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+            } else false
+        }
+
+        if (isOptimized || isDataRestricted) {
+            Surface(
+                color = Color.Yellow.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(12.dp),
+                onClick = {
+                    try {
+                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        val intent = Intent(Settings.ACTION_SETTINGS)
+                        context.startActivity(intent)
+                    }
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isOptimized && isDataRestricted) "⚠️ Throttled: Tap to fix"
+                              else if (isOptimized) "🔋 Battery Optimized: Tap to fix"
+                              else "📶 Data Restricted: Tap to fix",
+                        color = Color.Yellow,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
         super.onResume()
         // Update service state when returning to app
         serviceRunningState = AirShareService.isRunning
