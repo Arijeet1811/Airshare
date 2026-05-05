@@ -69,8 +69,18 @@ class BleManager(
     private val recentlyTriggeredPeers = mutableSetOf<String>()
     private val TRIGGER_COOLDOWN_MS = 3000L  // Don't re-trigger same peer within 3 seconds
 
+    private var isLowPowerMode = false
+    private val ACTIVE_SCAN_DURATION = 5 * 60 * 1000L // 5 Minutes
+    private val DUTY_CYCLE_INTERVAL = 30 * 1000L // 30 Seconds gap
+    private val DUTY_CYCLE_SCAN_TIME = 5000L // 5 Seconds scan
+
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            if (isLowPowerMode) {
+                LogUtil.i("BleManager", "Peer found! Switching to Active Mode.")
+                isLowPowerMode = false // Wake up
+            }
+
             val device = result.device
             val deviceName = result.scanRecord?.deviceName ?: device.name ?: device.address ?: "Unknown"
             val rssi = result.rssi
@@ -160,7 +170,7 @@ class BleManager(
     }
 
     fun startDiscovery() {
-        LogUtil.i("BleManager", "🚀 Starting discovery")
+        LogUtil.i("BleManager", "🚀 Starting discovery (with adaptive scanning)")
 
         if (adapter == null) {
             LogUtil.e("BleManager", "Bluetooth adapter is null")
@@ -181,28 +191,53 @@ class BleManager(
         }
 
         isDiscoveryActive = true
+        isLowPowerMode = false
         _discoveredPeers.value = emptyList()
         recentlyTriggeredPeers.clear()
 
         discoveryJob = managerScope.launch {
-            while (isDiscoveryActive) {
+            // Phase 1: 5 minutes of continuous adaptive scanning
+            val startTime = System.currentTimeMillis()
+            
+            while (isActive && isDiscoveryActive) {
                 try {
+                    val now = System.currentTimeMillis()
+                    val peerActivity = _discoveredPeers.value.any { now - it.lastSeenMs < 60000 }
+                    
+                    // Transition to Low Power Mode if 5 mins passed and no active peers
+                    if (!isLowPowerMode && now - startTime > ACTIVE_SCAN_DURATION && !peerActivity) {
+                        LogUtil.i("BleManager", "🔋 Entering Low Power Mode (Duty Cycle)")
+                        isLowPowerMode = true
+                    }
+
                     startAdvertising()
                     startScanning()
                     
-                    // ✅ FAST: Scan for 3 seconds only
-                    delay(SCAN_DURATION_MS)
-                    stopScanningOnly()
-                    
-                    // ✅ FAST: Short 1 second gap
-                    delay(SCAN_INTERVAL_MS)
-                    
+                    if (isLowPowerMode) {
+                        // Duty Cycle: Scan for 5 seconds
+                        delay(DUTY_CYCLE_SCAN_TIME)
+                        stopScanningOnly()
+
+                        // 🛠️ INTERRUPTIBLE SLEEP: 30s gap broken into 1s chunks
+                        // Isse battery bhi bachegi aur app turant "Stop" hogi
+                        val gapTicks = (DUTY_CYCLE_INTERVAL / 1000).toInt()
+                        repeat(gapTicks) {
+                            if (!isDiscoveryActive || !isLowPowerMode) return@repeat 
+                            delay(1000) 
+                            yield() 
+                        }
+                    } else {
+                        // Active Mode: Continuous-ish scanning
+                        delay(SCAN_DURATION_MS)
+                        stopScanningOnly()
+                        delay(SCAN_INTERVAL_MS)
+                    }
                 } catch (e: CancellationException) {
                     LogUtil.d("BleManager", "Discovery cancelled")
                     throw e
                 } catch (e: Exception) {
                     LogUtil.e("BleManager", "Discovery cycle error", e)
-                    delay(1000)
+                    delay(DUTY_CYCLE_SCAN_TIME)
                 }
             }
             LogUtil.i("BleManager", "Discovery stopped")
@@ -310,7 +345,9 @@ class BleManager(
     }
 
     fun restartDiscovery() {
+        LogUtil.i("BleManager", "🔄 Restarting discovery manually")
         stopDiscovery()
+        // Small delay to ensure the hardware finishes stopping before starting again
         managerScope.launch {
             delay(500)
             startDiscovery()
@@ -318,4 +355,14 @@ class BleManager(
     }
 
     fun isBluetoothEnabled(): Boolean = adapter?.isEnabled == true
+
+    fun resetToActiveMode() {
+        if (isLowPowerMode) {
+            LogUtil.i("BleManager", "⚡ Manual Reset: Switching to Active Mode")
+            isLowPowerMode = false
+            // The discovery loop will pick up the mode change on its next tick (within 1s)
+        }
+    }
+
+    fun isLowPowerMode(): Boolean = isLowPowerMode
 }

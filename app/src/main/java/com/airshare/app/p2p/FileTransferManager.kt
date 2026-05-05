@@ -34,7 +34,7 @@ import kotlin.math.min
 class FileTransferManager {
 
     private val PORT = 8888
-    private val SOCKET_TIMEOUT = 15000
+    private val SOCKET_TIMEOUT = 30000 // 30s Timeout
     private val TAG = "FileTransferManager"
 
     companion object {
@@ -44,6 +44,7 @@ class FileTransferManager {
         private const val MAX_METADATA_SIZE = 10 * 1024
         private const val EXPECTED_KEY_FINGERPRINT = ""
         private const val TRANSFER_TIMEOUT = 5 * 60 * 1000L
+        private const val BUFFER_SIZE = 64 * 1024 // 64KB Buffer for God Level speed
     }
 
     private fun verifyKeyFingerprint(publicKey: java.security.PublicKey): Boolean {
@@ -190,7 +191,7 @@ class FileTransferManager {
         }
 
         contentResolver.openInputStream(uri)?.use { fileInput ->
-            val buffer = ByteArray(8192)
+            val buffer = ByteArray(BUFFER_SIZE)
             var bytesRead: Int
             var totalSent = 0L
 
@@ -344,7 +345,7 @@ class FileTransferManager {
                 init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
             }
 
-            val buffer = ByteArray(8192)
+            val buffer = ByteArray(BUFFER_SIZE)
             var totalReceived = 0L
 
             while (totalReceived < fileSize) {
@@ -389,7 +390,7 @@ class FileTransferManager {
     private fun calculateHash(fd: FileDescriptor): String {
         val digest = MessageDigest.getInstance("SHA-256")
         FileInputStream(fd).use { fis ->
-            val buffer = ByteArray(8192)
+            val buffer = ByteArray(BUFFER_SIZE)
             var bytesRead: Int
             while (fis.read(buffer).also { bytesRead = it } != -1) {
                 digest.update(buffer, 0, bytesRead)

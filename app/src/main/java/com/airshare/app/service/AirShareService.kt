@@ -319,6 +319,12 @@ class AirShareService : Service() {
 
     fun getDiscoveredPeers(): StateFlow<List<Peer>> = bleManager.discoveredPeers
 
+    fun isLowPowerMode(): Boolean = bleManager.isLowPowerMode()
+
+    fun resetToActiveMode() {
+        bleManager.resetToActiveMode()
+    }
+
     override fun onDestroy() {
         isRunning = false
         cancelPeriodicBleRestart()
@@ -336,7 +342,9 @@ class AirShareService : Service() {
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_NEARBY_DEVICE
             } else {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             }

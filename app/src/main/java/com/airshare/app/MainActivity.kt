@@ -338,6 +338,12 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Update service state when returning to app
         serviceRunningState = AirShareService.isRunning
+        
+        // Agar user ne app kholi hai, toh discovery ko "Fast" mode mein daal do
+        if (airShareService?.isLowPowerMode() == true) {
+            airShareService?.resetToActiveMode()
+            Toast.makeText(this, "Searching nearby...", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onDestroy() {
