@@ -23,6 +23,9 @@ import kotlin.math.sqrt
 class PeerAnimationState(val peerId: String) {
     val scale = Animatable(0f)
     val alpha = Animatable(0f)
+    val x = Animatable(0f)
+    val y = Animatable(0f)
+    var initialized = false
 }
 
 @Composable
@@ -42,6 +45,16 @@ fun RadarView(
             animation = tween(3000, easing = EaseOutExpo),
             repeatMode = RepeatMode.Restart
         ), label = "pulse"
+    )
+
+    // Rotating scanner beam
+    val scanRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ), label = "scanRotation"
     )
 
     // Animation states for peers
@@ -103,6 +116,19 @@ fun RadarView(
     ) {
         val center = Offset(size.width / 2, size.height / 2)
         val maxRadius = minOf(size.width, size.height) / 2.2f
+
+        // Draw rotating scanner beam
+        drawArc(
+            brush = androidx.compose.ui.graphics.Brush.sweepGradient(
+                colors = listOf(Color.Transparent, Color(0xFF34C759).copy(alpha = 0.2f), Color.Transparent),
+                center = center
+            ),
+            startAngle = scanRotation - 45f,
+            sweepAngle = 45f,
+            useCenter = true,
+            topLeft = Offset(center.x - maxRadius, center.y - maxRadius),
+            size = Size(maxRadius * 2, maxRadius * 2)
+        )
 
         // Draw dot-matrix grid (Nothing aesthetic)
         val dotColor = Color.White.copy(alpha = 0.05f)
@@ -181,8 +207,33 @@ fun RadarView(
             val normalizedRssi = (peer.rssi.coerceIn(-100, -30) + 100) / 70f
             val radius = maxRadius * (1f - normalizedRssi * 0.7f).coerceIn(0.25f, 0.95f)
             
-            val x = center.x + radius * cos(angle).toFloat()
-            val y = center.y + radius * sin(angle).toFloat()
+            val targetX = center.x + radius * cos(angle).toFloat()
+            val targetY = center.y + radius * sin(angle).toFloat()
+
+            // Update state positions with spring
+            LaunchedEffect(targetX, targetY) {
+                if (!state.initialized) {
+                    state.x.snapTo(targetX)
+                    state.y.snapTo(targetY)
+                    state.initialized = true
+                } else {
+                    launch {
+                        state.x.animateTo(
+                            targetX,
+                            spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessVeryLow)
+                        )
+                    }
+                    launch {
+                        state.y.animateTo(
+                            targetY,
+                            spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessVeryLow)
+                        )
+                    }
+                }
+            }
+
+            val x = state.x.value
+            val y = state.y.value
 
             // Apply entry animations
             val s = state.scale.value

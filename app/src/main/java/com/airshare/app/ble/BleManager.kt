@@ -69,6 +69,19 @@ class BleManager(
     private val recentlyTriggeredPeers = mutableSetOf<String>()
     private val TRIGGER_COOLDOWN_MS = 3000L  // Don't re-trigger same peer within 3 seconds
 
+    // RSSI Smoothing: Map of Peer ID to list of last N RSSI values
+    private val rssiHistory = mutableMapOf<String, MutableList<Int>>()
+    private val RSSI_WINDOW_SIZE = 5
+
+    private fun getSmoothedRssi(peerId: String, currentRssi: Int): Int {
+        val history = rssiHistory.getOrPut(peerId) { mutableListOf() }
+        history.add(currentRssi)
+        if (history.size > RSSI_WINDOW_SIZE) {
+            history.removeAt(0)
+        }
+        return history.average().toInt()
+    }
+
     private var isLowPowerMode = false
     private val ACTIVE_SCAN_DURATION = 5 * 60 * 1000L // 5 Minutes
     private val DUTY_CYCLE_INTERVAL = 30 * 1000L // 30 Seconds gap
@@ -98,12 +111,13 @@ class BleManager(
             val bleIdentifier = mfrData?.joinToString("") { "%02x".format(it) } ?: device.address
 
             // ✅ INSTANT PROXIMITY DETECTION - No waiting!
-            val isClose = rssi > PROXIMITY_THRESHOLD
+            val smoothedRssi = getSmoothedRssi(device.address, rssi)
+            val isClose = smoothedRssi > PROXIMITY_THRESHOLD
 
             val peer = Peer(
                 id = device.address,
                 name = deviceName,
-                rssi = rssi,
+                rssi = smoothedRssi,
                 isProximityTriggered = isClose,
                 lastSeenMs = System.currentTimeMillis(),
                 bleIdentifier = bleIdentifier
@@ -335,6 +349,7 @@ class BleManager(
         stopScanningOnly()
         _discoveredPeers.value = emptyList()
         recentlyTriggeredPeers.clear()
+        rssiHistory.clear()
     }
 
     private fun hasRequiredPermissions(): Boolean {

@@ -218,15 +218,36 @@ class MainActivity : ComponentActivity() {
                                     letterSpacing = (-1.5).sp
                                 )
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .background(
-                                                if (serviceRunningState) Color(0xFF34C759) else Color.White.copy(alpha = 0.2f),
-                                                RoundedCornerShape(3.dp)
-                                            )
+                                    val pulseScale = rememberInfiniteTransition(label = "StatusPulse").animateFloat(
+                                        initialValue = 1f,
+                                        targetValue = 1.4f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(1500, easing = LinearEasing),
+                                            repeatMode = RepeatMode.Reverse
+                                        ), label = "PulseScale"
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    
+                                    Box(contentAlignment = Alignment.Center) {
+                                        if (serviceRunningState) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(10.dp * pulseScale.value)
+                                                    .background(
+                                                        Color(0xFF34C759).copy(alpha = 0.3f),
+                                                        RoundedCornerShape(5.dp)
+                                                    )
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .background(
+                                                    if (serviceRunningState) Color(0xFF34C759) else Color.White.copy(alpha = 0.2f),
+                                                    RoundedCornerShape(3.dp)
+                                                )
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = if (serviceRunningState) "Active Node" else "Offline",
                                         fontSize = 12.sp,
@@ -276,13 +297,18 @@ class MainActivity : ComponentActivity() {
                             BatteryDataSaverPrompt()
                             Spacer(modifier = Modifier.height(20.dp))
                             Surface(
-                                modifier = Modifier.fillMaxWidth(),
-                                color = Color.White.copy(alpha = 0.03f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp),
+                                color = Color.White.copy(alpha = 0.05f),
                                 shape = RoundedCornerShape(32.dp),
                                 border = androidx.compose.foundation.BorderStroke(
                                     width = 1.dp,
                                     brush = Brush.verticalGradient(
-                                        colors = listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)
+                                        colors = listOf(
+                                            Color.White.copy(alpha = 0.15f),
+                                            Color.White.copy(alpha = 0.02f)
+                                        )
                                     )
                                 )
                             ) {
@@ -782,36 +808,83 @@ fun TransferProgressIndicator(
 @Composable
 fun SuccessAnimation(onStart: () -> Unit = {}, onComplete: () -> Unit) {
     val scale = remember { Animatable(0f) }
+    val ringsAlpha = remember { Animatable(0.6f) }
+    val ringsScale = remember { Animatable(1f) }
     
     LaunchedEffect(Unit) {
         onStart()
-        scale.animateTo(
-            targetValue = 1.2f,
-            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
-        )
-        scale.animateTo(1f)
-        delay(2000)
+        launch {
+            scale.animateTo(
+                targetValue = 1.2f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
+            )
+            scale.animateTo(1f)
+        }
+        launch {
+            ringsScale.animateTo(
+                targetValue = 2.5f,
+                animationSpec = tween(1500, easing = EaseOutExpo)
+            )
+        }
+        launch {
+            ringsAlpha.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(1500, easing = LinearEasing)
+            )
+        }
+        delay(2500)
         onComplete()
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f)),
+            .background(Color.Black.copy(alpha = 0.8f)),
         contentAlignment = Alignment.Center
     ) {
+        // Expanding success rings
         Box(
             modifier = Modifier
                 .size(120.dp)
-                .scale(scale.value)
-                .background(Color(0xFF34C759), RoundedCornerShape(60.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = "Success",
-                tint = Color.White,
-                modifier = Modifier.size(64.dp)
+                .scale(ringsScale.value)
+                .background(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF34C759).copy(alpha = ringsAlpha.value), Color.Transparent)
+                    ),
+                    shape = RoundedCornerShape(60.dp)
+                )
+        )
+        
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                modifier = Modifier
+                    .size(120.dp)
+                    .scale(scale.value)
+                    .background(Color(0xFF34C759), RoundedCornerShape(60.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Success",
+                    tint = Color.White,
+                    modifier = Modifier.size(64.dp)
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            Text(
+                text = "Transfer Complete",
+                color = Color.White,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.scale(scale.value)
+            )
+            Text(
+                text = "Artifacts successfully deployed",
+                color = Color.White.copy(alpha = 0.5f),
+                fontSize = 14.sp,
+                modifier = Modifier.padding(top = 8.dp)
             )
         }
     }
