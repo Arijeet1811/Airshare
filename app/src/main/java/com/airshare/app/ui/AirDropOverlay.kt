@@ -72,7 +72,8 @@ fun AirDropOverlay(
                             else -> "$totalSizeBytes B"
                         }
                         Text(
-                            text = if (isSender) "Waiting for response..." else "wants to send $fileCount file${if (fileCount != 1) "s" else ""} ($sizeText)",
+                            text = if (isSender) "Waiting for response..." 
+                                   else "${peer.name} wants to send $fileCount file${if (fileCount != 1) "s" else ""} ($sizeText)",
                             color = Color.Gray,
                             fontSize = 14.sp
                         )

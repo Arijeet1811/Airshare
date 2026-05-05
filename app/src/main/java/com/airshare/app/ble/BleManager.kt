@@ -18,6 +18,7 @@ import android.util.Log
 import com.airshare.app.model.Peer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,35 +34,31 @@ class BleManager(
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val adapter: BluetoothAdapter? = bluetoothManager.adapter
-    private val advertiser = adapter?.bluetoothLeAdvertiser
-    private val scanner = adapter?.bluetoothLeScanner
 
     private val _discoveredPeers = MutableStateFlow<List<Peer>>(emptyList())
     val discoveredPeers: StateFlow<List<Peer>> = _discoveredPeers.asStateFlow()
 
-    private val SERVICE_UUID = UUID.fromString("0000feaa-0000-1000-8000-00805f9b34fb") // AirShare Service UUID
-    private val PROXIMITY_THRESHOLD = -65 // RSSI threshold for "close" proximity
+    private val SERVICE_UUID = UUID.fromString("0000feaa-0000-1000-8000-00805f9b34fb")
+    private val PROXIMITY_THRESHOLD = -70 // Slightly relaxed from -65 for better real-world performance
+
     private val managerScope = CoroutineScope(Dispatchers.Main)
-    
-    private var lastPeerFoundTime = System.currentTimeMillis()
+    private var discoveryJob: Job? = null
+
     private var isScanning = false
-    private var throttleJob: kotlinx.coroutines.Job? = null
+    private var isAdvertising = false
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            lastPeerFoundTime = System.currentTimeMillis()
             val device = result.device
-            val deviceName = result.scanRecord?.deviceName ?: device.address ?: "Unknown"
+            val deviceName = result.scanRecord?.deviceName ?: device.address ?: "Unknown Device"
             val rssi = result.rssi
-            val isClose = rssi > PROXIMITY_THRESHOLD
-
-            val existingPeer = _discoveredPeers.value.find { it.id == device.address }
-            val wasAlreadyTriggered = existingPeer?.isProximityTriggered ?: false
 
             val mfrData = result.scanRecord?.getManufacturerSpecificData(0xFFFF)
             val bleIdentifier = mfrData?.joinToString("") { "%02x".format(it) } ?: device.address
 
-            val newPeer = Peer(
+            val isClose = rssi > PROXIMITY_THRESHOLD
+
+            val peer = Peer(
                 id = device.address,
                 name = deviceName,
                 rssi = rssi,
@@ -70,21 +67,21 @@ class BleManager(
                 bleIdentifier = bleIdentifier
             )
 
-            if (isClose && !wasAlreadyTriggered) {
-                onProximityDetected(newPeer)
+            if (isClose) {
+                onProximityDetected(peer)
             }
 
-            updatePeers(newPeer)
+            updatePeers(peer)
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e("BleManager", "Scan failed with error: $errorCode")
+            Log.e("BleManager", "Scan failed with error code: $errorCode")
         }
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            Log.d("BleManager", "BLE Advertising started successfully")
+            Log.i("BleManager", "BLE Advertising started successfully")
         }
 
         override fun onStartFailure(errorCode: Int) {
@@ -92,81 +89,55 @@ class BleManager(
         }
     }
 
-    private fun updatePeers(peer: Peer) {
-        val currentList = _discoveredPeers.value.toMutableList()
-        val index = currentList.indexOfFirst { it.id == peer.id }
+    private fun updatePeers(newPeer: Peer) {
+        val current = _discoveredPeers.value.toMutableList()
+        val index = current.indexOfFirst { it.id == newPeer.id }
+
         if (index != -1) {
-            currentList[index] = peer
+            current[index] = newPeer
         } else {
-            currentList.add(peer)
+            current.add(newPeer)
         }
-        _discoveredPeers.value = currentList
+
+        // Cleanup old peers
+        val now = System.currentTimeMillis()
+        _discoveredPeers.value = current.filter { now - it.lastSeenMs < 15000 } // 15 seconds timeout
     }
 
     fun startDiscovery() {
-        if (adapter == null || !adapter.isEnabled) return
+        if (adapter == null || !adapter.isEnabled) {
+            Log.w("BleManager", "Bluetooth is disabled")
+            return
+        }
+
+        stopDiscovery() // Clean previous job
         
-        lastPeerFoundTime = System.currentTimeMillis()
-        throttleJob?.cancel()
-        throttleJob = managerScope.launch {
-            // Monitor peer list and cleanup
-            launch {
-                while (true) {
-                    delay(5000)
-                    val currentTime = System.currentTimeMillis()
-                    val currentList = _discoveredPeers.value
-                    val filteredList = currentList.filter { currentTime - it.lastSeenMs < 10000 }
-                    if (filteredList.size != currentList.size) {
-                        _discoveredPeers.value = filteredList
-                    }
-                }
-            }
+        // Clear old peers immediately
+        _discoveredPeers.value = emptyList()
 
-            // Adaptive scanning and advertising logic
+        discoveryJob = managerScope.launch {
             while (true) {
-                val currentTime = System.currentTimeMillis()
-                val timeSinceLastFound = currentTime - lastPeerFoundTime
-                
-                if (timeSinceLastFound > 5 * 60 * 1000) { // 5 minutes
-                    // Throttled mode: 5s active every 30s
-                    Log.d("BleManager", "Throttling BLE discovery due to inactivity")
-                    startDiscoveryPrerequisites()
-                    delay(5000)
-                    stopDiscoveryPrerequisites()
-                    delay(25000)
+                startAdvertising()
+                startScanning()
+
+                // Adaptive duty cycle for battery saving
+                delay(if (_discoveredPeers.value.isEmpty()) 8000L else 12000L)
+
+                stopScanningOnly()
+
+                // Longer sleep when no devices around
+                if (_discoveredPeers.value.isEmpty()) {
+                    delay(18000L) // ~30s cycle when idle
                 } else {
-                    // Continuous mode
-                    startDiscoveryPrerequisites()
-                    delay(10000)
+                    delay(8000L)
                 }
             }
         }
     }
-
-    private fun startDiscoveryPrerequisites() {
-        startAdvertising()
-        startScanning()
-    }
-
-    private fun stopDiscoveryPrerequisites() {
-        if (isAdvertising) {
-            advertiser?.stopAdvertising(advertiseCallback)
-            isAdvertising = false
-        }
-        stopScanningOnly()
-    }
-
-    private fun stopScanningOnly() {
-        if (isScanning) {
-            scanner?.stopScan(scanCallback)
-            isScanning = false
-        }
-    }
-
-    private var isAdvertising = false
 
     private fun startAdvertising() {
-        if (isAdvertising) return
+        if (isAdvertising || adapter?.bluetoothLeAdvertiser == null) return
+
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
@@ -174,35 +145,23 @@ class BleManager(
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        val deviceName = adapter?.name?.take(8) ?: "AirShare"
-        
-        val wifiMac = Settings.Secure.getString(
-            context.contentResolver,
-            "android_id"
-        ) ?: "000000000000"
-        // Encode first 6 chars of android_id as manufacturer data (company id 0xFFFF = test)
-        val macBytes = wifiMac.take(12).chunked(2).map {
-            it.toIntOrNull(16)?.toByte() ?: 0x00
-        }.toByteArray().let {
-            if (it.size < 6) it + ByteArray(6 - it.size) else it.take(6).toByteArray()
-        }
+        val manufacturerData = Settings.Secure.getString(context.contentResolver, "android_id")
+            ?.take(12)?.chunked(2)?.map { it.toIntOrNull(16)?.toByte() ?: 0x00 }?.toByteArray()
+            ?: ByteArray(6)
 
         val data = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .setIncludeDeviceName(true)
-            .addManufacturerData(0xFFFF, macBytes)
+            .addManufacturerData(0xFFFF, manufacturerData)
             .build()
 
-        val scanResponse = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
-            .build()
-
-        advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
+        adapter.bluetoothLeAdvertiser.startAdvertising(settings, data, advertiseCallback)
         isAdvertising = true
     }
 
     private fun startScanning() {
-        if (isScanning) return
+        if (isScanning || adapter?.bluetoothLeScanner == null) return
+
         val filter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
@@ -211,12 +170,37 @@ class BleManager(
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
-        scanner?.startScan(listOf(filter), settings, scanCallback)
+        adapter.bluetoothLeScanner.startScan(listOf(filter), settings, scanCallback)
         isScanning = true
     }
 
+    private fun stopScanningOnly() {
+        if (isScanning) {
+            adapter?.bluetoothLeScanner?.stopScan(scanCallback)
+            isScanning = false
+        }
+    }
+
+    private fun stopAdvertising() {
+        if (isAdvertising) {
+            adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
+            isAdvertising = false
+        }
+    }
+
     fun stopDiscovery() {
-        throttleJob?.cancel()
-        stopDiscoveryPrerequisites()
+        discoveryJob?.cancel()
+        stopAdvertising()
+        stopScanningOnly()
+        // Clear old peers
+        _discoveredPeers.value = emptyList()
+    }
+
+    fun restartDiscovery() {
+        stopDiscovery()
+        managerScope.launch {
+            delay(600)
+            startDiscovery()
+        }
     }
 }

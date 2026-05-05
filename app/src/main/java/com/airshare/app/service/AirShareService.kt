@@ -70,37 +70,50 @@ class AirShareService : Service() {
             wifiDirectManager.initiateDiscovery()
             serviceScope.launch(Dispatchers.IO) {
                 var connected = false
+                var currentDelay = 1500L // Incremental delay
+                
                 repeat(6) { attempt ->
                     if (connected) return@repeat
-                    kotlinx.coroutines.delay(2000)
+                    
+                    kotlinx.coroutines.delay(currentDelay)
+                    // Increase delay for next attempt
+                    currentDelay = (currentDelay * 1.5).toLong().coerceAtMost(5000L)
+
                     val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
-                    // Strategy 1: Try exact name match first
+                    
+                    // Strategy 1: Name match
                     var matchedDevice = wifiDevices.find {
                         it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true)
                     }
-                    // Strategy 2: If no name match, take the first available AirShare device
-                    // (works when only 2 phones are nearby — most common use case)
+                    
+                    // Strategy 2: Use BLE Identifier if it looks like a MAC (some devices)
+                    if (matchedDevice == null && peer.bleIdentifier.isNotEmpty()) {
+                        matchedDevice = wifiDevices.find {
+                            it.deviceAddress.replace(":", "").equals(peer.bleIdentifier.replace(":", ""), ignoreCase = true)
+                        }
+                    }
+
+                    // Strategy 3: Fallback to first available device if solitary
                     if (matchedDevice == null && wifiDevices.size == 1) {
                         matchedDevice = wifiDevices.first()
-                        android.util.Log.d("AirShareService",
-                            "Using only available WiFi Direct device: ${matchedDevice.deviceName}")
+                        android.util.Log.d("AirShareService", 
+                            "Solitary device fallback: using ${matchedDevice.deviceName}")
                     }
+
                     if (matchedDevice != null) {
-                        android.util.Log.d("AirShareService",
-                            "Connecting on attempt ${attempt + 1}: ${matchedDevice.deviceName}")
+                        android.util.Log.i("AirShareService", 
+                            "Connecting to matched device: ${matchedDevice.deviceName} (Attempt ${attempt + 1})")
                         wifiDirectManager.connect(matchedDevice)
                         connected = true
                     } else {
-                        android.util.Log.w("AirShareService",
-                            "Attempt ${attempt + 1}: ${wifiDevices.size} WiFi devices found, " +
-                            "none matched peer: ${peer.name}. Retrying discovery...")
+                        android.util.Log.w("AirShareService", 
+                            "Attempt ${attempt + 1}: no match for ${peer.name}. Devices: ${wifiDevices.map { it.deviceName }}")
                         wifiDirectManager.initiateDiscovery()
                     }
                 }
+                
                 if (!connected) {
-                    android.util.Log.e("AirShareService",
-                        "Auto-connect failed after 6 attempts for peer: ${peer.name}")
-                    // Reset proximity trigger so user can tap manually on radar
+                    android.util.Log.e("AirShareService", "Failed to connect to ${peer.name} after multiple attempts")
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         _transferState.value = TransferState.Idle
                     }
@@ -123,6 +136,12 @@ class AirShareService : Service() {
                 }
             }
         }
+
+        // Initial notification
+        updateNotification("AirShare is active - Looking for nearby devices...")
+        
+        // Make sure BLE starts properly
+        bleManager.startDiscovery()
     }
 
     fun setPendingFiles(files: List<Pair<Uri, String>>) {
@@ -140,30 +159,47 @@ class AirShareService : Service() {
         // For now reset state — socket will timeout on its own
     }
 
+    private var receivingJob: Job? = null
+    
     fun startReceiving() {
-        serviceScope.launch {
-            while (isRunning) {
-                transferManager.receiveFiles(
-                    contentResolver = contentResolver,
-                    onReceiveRequest = { fileName, fileSize ->
-                        val deferred = CompletableDeferred<Boolean>()
-                        _transferState.value = TransferState.Request(fileName, fileSize, 1, deferred)
-                        val result = deferred.await()
-                        if (!result) {
-                            _transferState.value = TransferState.Idle
-                        }
-                        result
-                    },
-                    onProgress = { fileName, progress, total ->
-                        _transferState.value = TransferState.Transferring(progress.toFloat() / total, fileName)
+        receivingJob?.cancel() // Cancel previous if any
+        
+        receivingJob = serviceScope.launch(Dispatchers.IO) {
+            transferManager.startReceiving(
+                contentResolver = contentResolver,
+                scope = serviceScope,
+                onReceiveRequest = { fileName, fileSize, _, fileCount ->
+                    val deferred = CompletableDeferred<Boolean>()
+                    _transferState.value = TransferState.Request(
+                        fileName = fileName,
+                        fileSize = fileSize,
+                        fileCount = fileCount,
+                        response = deferred
+                    )
+                    val accepted = deferred.await()
+                    if (!accepted) {
+                        _transferState.value = TransferState.Idle
                     }
-                ).onSuccess {
+                    accepted
+                },
+                onProgress = { fileName, progress, total ->
+                    val percentage = if (total > 0) progress.toFloat() / total else 0f
+                    _transferState.value = TransferState.Transferring(percentage, fileName)
+                },
+                onTransferComplete = {
                     _transferState.value = TransferState.Success
-                }.onFailure { e ->
-                    _transferState.value = TransferState.Error(e.message ?: "Receive failed")
+                    // Auto reset after success
+                    serviceScope.launch {
+                        kotlinx.coroutines.delay(2500)
+                        _transferState.compareAndSet(TransferState.Success, TransferState.Idle)
+                    }
                 }
-            }
+            )
         }
+    }
+
+    fun stopReceiving() {
+        transferManager.stopReceiving()
     }
 
     fun sendFiles(host: String, files: List<Pair<Uri, String>>) {
@@ -203,8 +239,8 @@ class AirShareService : Service() {
         }
         if (intent?.action == ACTION_RESTART_BLE) {
             bleManager.stopDiscovery()
-            kotlinx.coroutines.GlobalScope.launch {
-                kotlinx.coroutines.delay(500)
+            serviceScope.launch {
+                kotlinx.coroutines.delay(800)
                 bleManager.startDiscovery()
             }
             return START_STICKY
@@ -225,6 +261,8 @@ class AirShareService : Service() {
         bleManager.stopDiscovery()
         wifiDirectManager.unregisterReceiver(this)
         wifiDirectManager.cleanup()
+        stopReceiving()
+        pendingFiles = emptyList()
         serviceJob.cancel()
         super.onDestroy()
     }

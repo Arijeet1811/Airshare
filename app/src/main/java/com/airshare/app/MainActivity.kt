@@ -1,5 +1,4 @@
 package com.airshare.app
-import com.airshare.app.model.TransferState
 
 import android.Manifest
 import android.content.ComponentName
@@ -29,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -37,17 +37,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.airshare.app.model.Peer
+import com.airshare.app.model.TransferState
 import com.airshare.app.service.AirShareService
 import com.airshare.app.ui.AirDropOverlay
 import com.airshare.app.ui.RadarView
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
     private var airShareService: AirShareService? = null
     private var isBound by mutableStateOf(false)
+
+    // UI States
+    private var selectedUris by mutableStateOf<List<android.net.Uri>>(emptyList())
+    private var manualSelectedPeer by mutableStateOf<Peer?>(null)
+    private var isManualSenderMode by mutableStateOf(false)
 
     private val permissionsToRequest = mutableListOf<String>().apply {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -106,8 +109,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private var selectedUris by mutableStateOf<List<android.net.Uri>>(emptyList())
-
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris ->
@@ -120,30 +121,28 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        
+
         setContent {
-            val peers by if (isBound) {
-                airShareService?.getDiscoveredPeers()?.collectAsState() ?: mutableStateOf(emptyList())
-            } else {
-                remember { mutableStateOf(emptyList<Peer>()) }
-            }
+            val peers by if (isBound && airShareService != null) {
+                airShareService!!.getDiscoveredPeers().collectAsState()
+            } else remember { mutableStateOf(emptyList<Peer>()) }
 
-            val transferState by if (isBound) {
-                airShareService?.transferState?.collectAsState() ?: mutableStateOf(TransferState.Idle)
-            } else {
-                remember { mutableStateOf(TransferState.Idle) }
-            }
+            val transferState by if (isBound && airShareService != null) {
+                airShareService!!.transferState.collectAsState()
+            } else remember { mutableStateOf(TransferState.Idle) }
 
-            val triggeredPeer = peers.find { it.isProximityTriggered }
-            var manualPeer by remember { mutableStateOf<Peer?>(null) }
-            var isSenderMode by remember { mutableStateOf(false) }
-            var dismissedPeerId by remember { mutableStateOf<String?>(null) }
-
-            // Handle incoming request UI
             val incomingRequest = transferState as? TransferState.Request
-            val activeOverlayPeer = incomingRequest?.let { 
-                Peer(id = "incoming", name = "Sender", rssi = 0) // We don't know the peer precisely here without more handshake, but we show the overlay
-            } ?: manualPeer ?: if (triggeredPeer?.id != dismissedPeerId) triggeredPeer else null
+            val triggeredPeer = peers.find { it.isProximityTriggered }
+
+            // Clean logic for showing overlay
+            val showOverlayPeer = when {
+                incomingRequest != null -> Peer(id = "incoming", name = "Nearby Device", rssi = 0)
+                manualSelectedPeer != null -> manualSelectedPeer
+                triggeredPeer != null -> triggeredPeer
+                else -> null
+            }
+
+            val isSenderMode = incomingRequest == null && (manualSelectedPeer != null || isManualSenderMode)
 
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -156,113 +155,63 @@ class MainActivity : ComponentActivity() {
                         RadarView(
                             peers = peers,
                             onPeerTapped = { peer ->
-                                manualPeer = peer
-                                isSenderMode = true
+                                manualSelectedPeer = peer
+                                isManualSenderMode = true
                             }
                         )
 
-                        // File Selection Button
+                        // Bottom Controls
                         Column(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(bottom = 60.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            var serviceRunning by remember { mutableStateOf(AirShareService.isRunning) }
-                            
-                            // Background Service Toggle
-                            Button(
-                                onClick = {
-                                    if (AirShareService.isRunning) {
-                                        stopAirShareService()
-                                    } else {
-                                        startAirShareService()
-                                    }
-                                    serviceRunning = !serviceRunning
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (serviceRunning) Color(0xFF34C759) else Color(0xFF007AFF)
-                                ),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            ) {
-                                Text(if (serviceRunning) "Service: ON" else "Start Background Service", color = Color.White)
-                            }
-
-                            Button(
-                                onClick = { filePickerLauncher.launch("*/*") },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Select Files to Share", color = Color.White)
-                            }
+                            ServiceToggleButton()
+                            SelectFilesButton()
                         }
 
+                        // Overlay
                         AirDropOverlay(
-                            peer = activeOverlayPeer,
-                            isSender = incomingRequest == null && isSenderMode,
+                            peer = showOverlayPeer,
+                            isSender = isSenderMode,
                             fileCount = incomingRequest?.fileCount ?: 1,
                             totalSizeBytes = incomingRequest?.fileSize ?: 0L,
-                            onDismiss = { 
+                            onDismiss = {
                                 if (incomingRequest != null) {
                                     incomingRequest.response.complete(false)
                                 } else {
-                                    dismissedPeerId = activeOverlayPeer?.id 
-                                    manualPeer = null
-                                    isSenderMode = false
+                                    // Manual sender mode dismiss
+                                    manualSelectedPeer = null
+                                    isManualSenderMode = false
                                 }
                             },
                             onAccept = { peer ->
                                 if (incomingRequest != null) {
                                     incomingRequest.response.complete(true)
                                 } else {
-                                    if (selectedUris.isNotEmpty()) {
-                                        if (isBound && airShareService != null) {
-                                            val filesToSend = selectedUris.map { uri ->
-                                                Pair(uri, getFileName(uri))
-                                            }
-                                            airShareService?.setPendingFiles(filesToSend)
-                                            isSenderMode = true
-                                            // Immediately attempt to send if WiFi Direct is already connected,
-                                            // otherwise the WifiDirectManager callback will trigger it when ready
-                                            airShareService?.trySendNowIfConnected()
-                                        } else {
-                                            Toast.makeText(this@MainActivity, "Service not bound", Toast.LENGTH_SHORT).show()
-                                        }
-                                    } else {
-                                        Toast.makeText(this@MainActivity, "Please select files first", Toast.LENGTH_SHORT).show()
-                                    }
+                                    handleSendFiles()
+                                    // Reset manual mode after starting send
+                                    manualSelectedPeer = null
+                                    isManualSenderMode = false
                                 }
                             }
                         )
 
+                        // Transfer Status Overlays
                         when (val state = transferState) {
                             is TransferState.Transferring -> {
                                 TransferProgressIndicator(
                                     progress = state.progress,
                                     fileName = state.fileName,
-                                    onCancel = {
-                                        airShareService?.cancelTransfer()
-                                    }
+                                    onCancel = { airShareService?.cancelTransfer() }
                                 )
                             }
-                            is TransferState.Success -> {
-                                var showSuccess by remember { mutableStateOf(true) }
-                                if (showSuccess) {
-                                    SuccessAnimation(
-                                        onStart = { performHapticFeedback() },
-                                        onComplete = {
-                                            showSuccess = false
-                                            // Reset dismissed peer id to allow new triggers
-                                            dismissedPeerId = null
-                                            manualPeer = null
-                                            isSenderMode = false
-                                        }
-                                    )
-                                }
-                            }
+                            is TransferState.Success -> SuccessAnimationWithReset()
                             is TransferState.Error -> {
-                                Toast.makeText(this@MainActivity, state.message, Toast.LENGTH_LONG).show()
+                                LaunchedEffect(state) {
+                                    Toast.makeText(this@MainActivity, state.message, Toast.LENGTH_LONG).show()
+                                }
                             }
                             else -> {}
                         }
@@ -270,7 +219,64 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
         checkAndRequestPermissions()
+    }
+
+    private fun handleSendFiles() {
+        if (selectedUris.isNotEmpty() && isBound && airShareService != null) {
+            val filesToSend = selectedUris.map { uri ->
+                Pair(uri, getFileName(uri))
+            }
+            airShareService?.setPendingFiles(filesToSend)
+            airShareService?.trySendNowIfConnected()
+        } else {
+            Toast.makeText(this, "Please select files first", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    @Composable
+    private fun ServiceToggleButton() {
+        var serviceRunning by remember { mutableStateOf(AirShareService.isRunning) }
+        Button(
+            onClick = {
+                if (AirShareService.isRunning) stopAirShareService() else startAirShareService()
+                serviceRunning = !serviceRunning
+            },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (serviceRunning) Color(0xFF34C759) else Color(0xFF007AFF)
+            ),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.padding(bottom = 8.dp)
+        ) {
+            Text(if (serviceRunning) "Service: ON" else "Start Background Service", color = Color.White)
+        }
+    }
+
+    @Composable
+    private fun SelectFilesButton() {
+        Button(
+            onClick = { filePickerLauncher.launch("*/*") },
+            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text("Select Files to Share", color = Color.White)
+        }
+    }
+
+    @Composable
+    private fun SuccessAnimationWithReset() {
+        var showSuccess by remember { mutableStateOf(true) }
+        if (showSuccess) {
+            SuccessAnimation(
+                onStart = { performHapticFeedback() },
+                onComplete = {
+                    showSuccess = false
+                    manualSelectedPeer = null
+                    isManualSenderMode = false
+                }
+            )
+        }
     }
 
     override fun onResume() {

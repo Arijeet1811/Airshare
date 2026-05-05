@@ -31,20 +31,11 @@ import kotlin.math.min
 
 class FileTransferManager {
 
-    private fun calculateHash(fileDescriptor: FileDescriptor): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        FileInputStream(fileDescriptor).use { input ->
-            val buffer = ByteArray(8192)
-            var bytesRead: Int
-            while (input.read(buffer).also { bytesRead = it } != -1) {
-                digest.update(buffer, 0, bytesRead)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
-
     private val PORT = 8888
-    private val SOCKET_TIMEOUT = 10000 // 10 seconds
+    private val SOCKET_TIMEOUT = 15000 // 15 seconds
+    private val TAG = "FileTransferManager"
+
+    // ====================== SENDER SIDE ======================
 
     suspend fun sendFiles(
         host: String,
@@ -52,256 +43,332 @@ class FileTransferManager {
         files: List<Pair<Uri, String>>,
         onProgress: (Int, Long, Long) -> Unit
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val socket = Socket()
-            socket.bind(null)
-            socket.connect(InetSocketAddress(host, PORT), SOCKET_TIMEOUT)
-            socket.soTimeout = SOCKET_TIMEOUT
+        var socket: Socket? = null
+        try {
+            socket = Socket().apply {
+                bind(null)
+                connect(InetSocketAddress(host, PORT), SOCKET_TIMEOUT)
+                soTimeout = SOCKET_TIMEOUT
+            }
 
-            val inputStream = socket.getInputStream()
-            val dataInputStream = DataInputStream(inputStream)
-            val outputStream = socket.getOutputStream()
-            val dataOutputStream = DataOutputStream(outputStream)
+            val outputStream = DataOutputStream(socket.getOutputStream())
+            val inputStream = DataInputStream(socket.getInputStream())
 
-            // 1. Receive RSA Public Key
-            val pubKeySize = dataInputStream.readInt()
+            // 1. Send RSA Public Key (Receiver sends first, we receive)
+            val pubKeySize = inputStream.readInt()
             val pubKeyBytes = ByteArray(pubKeySize)
-            dataInputStream.readFully(pubKeyBytes)
-            val publicKey = KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(pubKeyBytes))
+            inputStream.readFully(pubKeyBytes)
+            val publicKey = KeyFactory.getInstance("RSA")
+                .generatePublic(X509EncodedKeySpec(pubKeyBytes))
 
-            // 2. Generate and Send Session Key (AES-256)
-            val keyGen = KeyGenerator.getInstance("AES")
-            keyGen.init(256)
-            val sessionKey = keyGen.generateKey()
-
-            val rsaCipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
-            val oaepParams = OAEPParameterSpec(
-                "SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT
-            )
-            rsaCipher.init(Cipher.ENCRYPT_MODE, publicKey, oaepParams)
-            val encryptedSessionKey = rsaCipher.doFinal(sessionKey.encoded)
-            dataOutputStream.writeInt(encryptedSessionKey.size)
-            dataOutputStream.write(encryptedSessionKey)
+            // 2. Generate AES Session Key and encrypt with RSA
+            val sessionKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+            val encryptedSessionKey = encryptSessionKey(sessionKey, publicKey)
+            
+            outputStream.writeInt(encryptedSessionKey.size)
+            outputStream.write(encryptedSessionKey)
 
             // 3. Send File Count
-            dataOutputStream.writeInt(files.size)
+            outputStream.writeInt(files.size)
 
             files.forEachIndexed { index, (uri, displayName) ->
-                val fileSize = getFileSize(contentResolver, uri)
-                
-                // 4. Metadata Handshake (JSON)
-                val metadataJson = JSONObject().apply {
-                    put("fileName", displayName)
-                    put("fileSize", fileSize)
-                    put("mimeType", contentResolver.getType(uri) ?: "application/octet-stream")
-                    // Calculate hash for integrity
-                    val hash = contentResolver.openFileDescriptor(uri, "r")?.use { 
-                        calculateHash(it.fileDescriptor)
-                    } ?: ""
-                    put("sha256", hash)
-                }
-                
-                val (iv, encryptedMetadata) = encryptWithGCM(metadataJson.toString().toByteArray(), sessionKey)
-                dataOutputStream.writeInt(iv.size)
-                dataOutputStream.write(iv)
-                dataOutputStream.writeInt(encryptedMetadata.size)
-                dataOutputStream.write(encryptedMetadata)
-                dataOutputStream.flush()
-
-                // Wait for receiver confirmation
-                val isAccepted = dataInputStream.readBoolean()
-                if (!isAccepted) {
-                    throw IOException("Receiver declined file: $displayName")
-                }
-
-                // 5. Encrypt and Stream File content
-                val fileIV = generateIV()
-                dataOutputStream.writeInt(fileIV.size)
-                dataOutputStream.write(fileIV)
-
-                val fileCipher = Cipher.getInstance("AES/GCM/NoPadding")
-                fileCipher.init(Cipher.ENCRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
-
-                val fileInputStream = contentResolver.openInputStream(uri) ?: return@forEachIndexed
-                val buffer = ByteArray(8192)
-                var bytesRead: Int
-                var totalBytesProcessed = 0L
-
-                while (fileInputStream.read(buffer).also { bytesRead = it } != -1) {
-                    val output = fileCipher.update(buffer, 0, bytesRead)
-                    if (output != null) {
-                        dataOutputStream.write(output)
-                    }
-                    totalBytesProcessed += bytesRead
-                    onProgress(index, totalBytesProcessed, fileSize)
-                }
-                val finalOutput = fileCipher.doFinal()
-                if (finalOutput != null) {
-                    dataOutputStream.write(finalOutput)
-                }
-                
-                fileInputStream.close()
-                dataOutputStream.flush()
+                sendSingleFile(contentResolver, uri, displayName, outputStream, inputStream, index, sessionKey, onProgress)
             }
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Send failed", e)
+            Result.failure(e)
+        } finally {
+            socket?.close()
+        }
+    }
+
+    private suspend fun sendSingleFile(
+        contentResolver: ContentResolver,
+        uri: Uri,
+        displayName: String,
+        output: DataOutputStream,
+        input: DataInputStream,
+        fileIndex: Int,
+        sessionKey: SecretKey,
+        onProgress: (Int, Long, Long) -> Unit
+    ) {
+        val fileSize = getFileSize(contentResolver, uri)
+        val fileHash = calculateHash(contentResolver, uri)
+
+        // Metadata
+        val metadata = JSONObject().apply {
+            put("fileName", displayName)
+            put("fileSize", fileSize)
+            put("mimeType", contentResolver.getType(uri) ?: "application/octet-stream")
+            put("sha256", fileHash)
+        }
+
+        val (iv, encryptedMetadata) = encryptWithGCM(metadata.toString().toByteArray(), sessionKey)
+        output.writeInt(iv.size)
+        output.write(iv)
+        output.writeInt(encryptedMetadata.size)
+        output.write(encryptedMetadata)
+        output.flush()
+
+        // Wait for acceptance
+        if (!input.readBoolean()) {
+            throw IOException("Receiver declined the file")
+        }
+
+        // Send File Data
+        val fileIV = generateIV()
+        output.writeInt(fileIV.size)
+        output.write(fileIV)
+
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+            init(Cipher.ENCRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
+        }
+
+        contentResolver.openInputStream(uri)?.use { fileInput ->
+            val buffer = ByteArray(8192)
+            var bytesRead: Int
+            var totalSent = 0L
+
+            while (fileInput.read(buffer).also { bytesRead = it } != -1) {
+                val encrypted = cipher.update(buffer, 0, bytesRead)
+                encrypted?.let { output.write(it) }
+                totalSent += bytesRead
+                onProgress(fileIndex, totalSent, fileSize)
+            }
+            val final = cipher.doFinal()
+            final?.let { output.write(it) }
+        }
+
+        output.flush()
+        Log.i(TAG, "File sent successfully: $displayName")
+    }
+
+    // ====================== RECEIVER SIDE ======================
+
+    private var serverSocket: ServerSocket? = null
+
+    suspend fun startReceiving(
+        contentResolver: ContentResolver,
+        scope: kotlinx.coroutines.CoroutineScope,
+        onReceiveRequest: suspend (String, Long, String, Int) -> Boolean, // fileName, size, senderName, fileCount
+        onProgress: (String, Long, Long) -> Unit,
+        onTransferComplete: () -> Unit
+    ) = withContext(Dispatchers.IO) {
+        try {
+            if (serverSocket == null || serverSocket?.isClosed == true) {
+                serverSocket = ServerSocket(PORT)
+                Log.i(TAG, "ServerSocket started on port $PORT")
+            }
+
+            Log.i(TAG, "Waiting for incoming connections...")
+
+            while (true) { // Persistent accept loop
+                val socket = try {
+                    serverSocket?.accept() ?: break
+                } catch (e: Exception) {
+                    if (serverSocket?.isClosed == true) break
+                    Log.w(TAG, "Accept error, continuing...", e)
+                    continue
+                }
+                socket.soTimeout = SOCKET_TIMEOUT
+
+                // Handle transfer in separate coroutine so main accept loop doesn't block
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        handleIncomingTransfer(socket, contentResolver, onReceiveRequest, onProgress)
+                        onTransferComplete()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in transfer handling", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            if (e.message?.contains("Socket closed", ignoreCase = true) != true) {
+                Log.e(TAG, "Fatal receiving error", e)
+            }
+        }
+    }
+
+    private suspend fun handleIncomingTransfer(
+        socket: Socket,
+        contentResolver: ContentResolver,
+        onReceiveRequest: suspend (String, Long, String, Int) -> Boolean,
+        onProgress: (String, Long, Long) -> Unit
+    ) {
+        try {
+            val input = DataInputStream(socket.getInputStream())
+            val output = DataOutputStream(socket.getOutputStream())
+
+            // 1. Generate & Send RSA Key Pair
+            val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+            val pubKeyBytes = keyPair.public.encoded
+            output.writeInt(pubKeyBytes.size)
+            output.write(pubKeyBytes)
+
+            // 2. Receive AES Session Key
+            val encKeySize = input.readInt()
+            val encKey = ByteArray(encKeySize)
+            input.readFully(encKey)
+            val sessionKey = decryptSessionKey(encKey, keyPair.private)
+
+            // 3. Receive File Count
+            val fileCount = input.readInt()
+
+            repeat(fileCount) {
+                receiveSingleFile(input, output, contentResolver, sessionKey, fileCount, onReceiveRequest, onProgress)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Transfer handling failed", e)
+        } finally {
             socket.close()
         }
     }
 
-    private fun getFileSize(contentResolver: ContentResolver, uri: Uri): Long {
-        return contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+    private suspend fun receiveSingleFile(
+        input: DataInputStream,
+        output: DataOutputStream,
+        contentResolver: ContentResolver,
+        sessionKey: SecretKey,
+        totalFileCount: Int,
+        onReceiveRequest: suspend (String, Long, String, Int) -> Boolean,
+        onProgress: (String, Long, Long) -> Unit
+    ) {
+        // Decrypt Metadata
+        val ivSize = input.readInt()
+        val iv = ByteArray(ivSize).also { input.readFully(it) }
+        val metaSize = input.readInt()
+        val encMeta = ByteArray(metaSize).also { input.readFully(it) }
+
+        val metadataJson = JSONObject(String(decryptWithGCM(encMeta, sessionKey, iv)))
+        val fileName = metadataJson.getString("fileName")
+        val fileSize = metadataJson.getLong("fileSize")
+        val expectedHash = metadataJson.getString("sha256")
+
+        // Ask user permission
+        if (!onReceiveRequest(fileName, fileSize, "Nearby Device", totalFileCount)) {
+            output.writeBoolean(false)
+            return
+        }
+
+        output.writeBoolean(true)
+        output.flush()
+
+        // Receive File
+        val fileIVSize = input.readInt()
+        val fileIV = ByteArray(fileIVSize).also { input.readFully(it) }
+
+        val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+            put(MediaStore.MediaColumns.MIME_TYPE, metadataJson.getString("mimeType"))
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AirShare")
+        }
+
+        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("Failed to create file")
+
+        var actualHash = ""
+        contentResolver.openOutputStream(uri)?.use { fileOut ->
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+                init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
+            }
+
+            val buffer = ByteArray(8192)
+            var totalReceived = 0L
+
+            while (totalReceived < fileSize) {
+                val toRead = minOf(buffer.size.toLong(), fileSize - totalReceived).toInt()
+                input.readFully(buffer, 0, toRead)
+
+                val decrypted = cipher.update(buffer, 0, toRead)
+                decrypted?.let { fileOut.write(it) }
+
+                totalReceived += toRead
+                onProgress(fileName, totalReceived, fileSize)
+            }
+
+            val final = cipher.doFinal()
+            final?.let { fileOut.write(it) }
+
+            // Verify hash
+            actualHash = calculateHashFromUri(contentResolver, uri)
+        }
+
+        if (expectedHash.isNotEmpty() && actualHash != expectedHash) {
+            contentResolver.delete(uri, null, null)
+            throw IOException("Hash verification failed for $fileName")
+        }
+
+        Log.i(TAG, "File received successfully: $fileName")
+    }
+
+    // ====================== Utility Functions ======================
+
+    private fun getFileSize(cr: ContentResolver, uri: Uri): Long {
+        return cr.query(uri, null, null, null, null)?.use { cursor ->
             val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-            if (sizeIndex != -1 && cursor.moveToFirst()) {
-                cursor.getLong(sizeIndex)
-            } else 0L
+            if (sizeIndex != -1 && cursor.moveToFirst()) cursor.getLong(sizeIndex) else 0L
         } ?: 0L
     }
 
-    suspend fun receiveFiles(
-        contentResolver: ContentResolver,
-        onReceiveRequest: suspend (String, Long) -> Boolean,
-        onProgress: (String, Long, Long) -> Unit
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        val serverSocket = ServerSocket(PORT)
-        runCatching {
-            val socket = serverSocket.accept()
-            socket.setSoTimeout(SOCKET_TIMEOUT)
-            
-            val inputStream = socket.getInputStream()
-            val dataInputStream = DataInputStream(inputStream)
-            val outputStream = socket.getOutputStream()
-            val dataOutputStream = DataOutputStream(outputStream)
+    private fun calculateHash(cr: ContentResolver, uri: Uri): String {
+        return cr.openFileDescriptor(uri, "r")?.use { calculateHash(it.fileDescriptor) } ?: ""
+    }
 
-            // 1. Generate and Send RSA Public Key
-            val keyPairGen = KeyPairGenerator.getInstance("RSA")
-            keyPairGen.initialize(2048)
-            val keyPair = keyPairGen.generateKeyPair()
-            val pubKeyBytes = keyPair.public.encoded
-            dataOutputStream.writeInt(pubKeyBytes.size)
-            dataOutputStream.write(pubKeyBytes)
+    private fun calculateHashFromUri(cr: ContentResolver, uri: Uri): String {
+        return cr.openFileDescriptor(uri, "r")?.use { calculateHash(it.fileDescriptor) } ?: ""
+    }
 
-            // 2. Receive and Decrypt Session Key
-            val encSessionKeySize = dataInputStream.readInt()
-            val encSessionKey = ByteArray(encSessionKeySize)
-            dataInputStream.readFully(encSessionKey)
-
-            val rsaCipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
-            val oaepParams = OAEPParameterSpec(
-                "SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT
-            )
-            rsaCipher.init(Cipher.DECRYPT_MODE, keyPair.private, oaepParams)
-            val sessionKeyBytes = rsaCipher.doFinal(encSessionKey)
-            val sessionKey = SecretKeySpec(sessionKeyBytes, "AES")
-
-            // 3. Read File Count
-            val fileCount = dataInputStream.readInt()
-
-            repeat(fileCount) {
-                // 4. Decrypt Metadata (Handshake)
-                val ivSize = dataInputStream.readInt()
-                val iv = ByteArray(ivSize)
-                dataInputStream.readFully(iv)
-                
-                val metadataSize = dataInputStream.readInt()
-                val encryptedMetadata = ByteArray(metadataSize)
-                dataInputStream.readFully(encryptedMetadata)
-                
-                val metadataJson = JSONObject(String(decryptWithGCM(encryptedMetadata, sessionKey, iv)))
-                val fileName = metadataJson.getString("fileName")
-                val fileSize = metadataJson.getLong("fileSize")
-                val mimeType = metadataJson.getString("mimeType")
-                val expectedHash = metadataJson.optString("sha256", "")
-
-                // Handle the onReceiveRequest callback to ask for user permission
-                if (!onReceiveRequest(fileName, fileSize)) {
-                    dataOutputStream.writeBoolean(false) // Decline
-                    throw IOException("User declined file transfer")
-                }
-                dataOutputStream.writeBoolean(true) // Accept
-                dataOutputStream.flush()
-
-                // Sanitize filename
-                val safeName = fileName.replace("..", "_").replace("/", "_").replace("\\", "_")
-
-                // 5. Decrypt File content
-                val fileIVSize = dataInputStream.readInt()
-                val fileIV = ByteArray(fileIVSize)
-                dataInputStream.readFully(fileIV)
-
-                // MediaStore API for Android 11+ compatibility
-                val values = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AirShare")
-                }
-
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                    ?: throw IOException("Failed to create MediaStore entry")
-
-                try {
-                    contentResolver.openOutputStream(uri)?.use { fileOutputStream ->
-                        val fileCipher = Cipher.getInstance("AES/GCM/NoPadding")
-                        fileCipher.init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
-
-                        val encryptedFileSize = (fileSize + 16).toInt()
-                        val buffer = ByteArray(8192)
-                        var totalBytesReceived = 0L
-                        
-                        while (totalBytesReceived < encryptedFileSize) {
-                            val toRead = min(buffer.size.toLong(), encryptedFileSize - totalBytesReceived).toInt()
-                            dataInputStream.readFully(buffer, 0, toRead)
-                            
-                            val output = fileCipher.update(buffer, 0, toRead)
-                            if (output != null) {
-                                fileOutputStream.write(output)
-                            }
-                            totalBytesReceived += toRead
-                            onProgress(fileName, min(totalBytesReceived, fileSize), fileSize)
-                        }
-                        
-                        val finalOutput = fileCipher.doFinal()
-                        if (finalOutput != null) {
-                            fileOutputStream.write(finalOutput)
-                        }
-
-                        // Verify integrity
-                        val actualHash = contentResolver.openFileDescriptor(uri, "r")?.use { 
-                            calculateHash(it.fileDescriptor)
-                        }
-                        if (expectedHash.isNotEmpty() && actualHash != expectedHash) {
-                            throw IOException("Hash verification failed for $fileName")
-                        }
-                    }
-                } catch (e: Exception) {
-                    contentResolver.delete(uri, null, null)
-                    throw e
-                }
-                
-                onProgress(fileName, fileSize, fileSize)
+    private fun calculateHash(fd: FileDescriptor): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(fd).use { fis ->
+            val buffer = ByteArray(8192)
+            var bytesRead: Int
+            while (fis.read(buffer).also { bytesRead = it } != -1) {
+                digest.update(buffer, 0, bytesRead)
             }
-            socket.close()
-        }.onFailure { e ->
-            Log.e("FileTransferManager", "Transfer error", e)
-        }.also {
-            serverSocket.close()
         }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun generateIV(): ByteArray {
-        val iv = ByteArray(12)
-        SecureRandom().nextBytes(iv)
-        return iv
-    }
+    private fun generateIV(): ByteArray = ByteArray(12).apply { SecureRandom().nextBytes(this) }
 
     private fun encryptWithGCM(data: ByteArray, key: SecretKey): Pair<ByteArray, ByteArray> {
         val iv = generateIV()
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
-        return Pair(iv, cipher.doFinal(data))
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+            init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
+        }
+        return iv to cipher.doFinal(data)
     }
 
     private fun decryptWithGCM(data: ByteArray, key: SecretKey, iv: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+        }
         return cipher.doFinal(data)
+    }
+
+    private fun encryptSessionKey(sessionKey: SecretKey, publicKey: java.security.PublicKey): ByteArray {
+        val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey, OAEPParameterSpec("SHA-256", "MGF1", java.security.spec.MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT))
+        return cipher.doFinal(sessionKey.encoded)
+    }
+
+    private fun decryptSessionKey(encryptedKey: ByteArray, privateKey: java.security.PrivateKey): SecretKey {
+        val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
+        cipher.init(Cipher.DECRYPT_MODE, privateKey, OAEPParameterSpec("SHA-256", "MGF1", java.security.spec.MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT))
+        val keyBytes = cipher.doFinal(encryptedKey)
+        return SecretKeySpec(keyBytes, "AES")
+    }
+
+    fun stopReceiving() {
+        try {
+            serverSocket?.close()
+            serverSocket = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing server socket", e)
+        }
     }
 }
