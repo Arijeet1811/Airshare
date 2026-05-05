@@ -127,7 +127,7 @@ class WifiDirectManager(
 
     fun requestConnectionInfo() {
         manager?.requestConnectionInfo(channel) { info ->
-            Log.d("WifiDirect", "Connection Info: groupFormed=${info.groupFormed}, isOwner=${info.isOwner}, ownerAddress=${info.groupOwnerAddress}")
+            Log.d("WifiDirect", "Connection Info: groupFormed=${info.groupFormed}, isOwner=${info.isGroupOwner}, ownerAddress=${info.groupOwnerAddress}")
 
             if (info.groupFormed) {
                 if (info.groupOwnerAddress == null) {

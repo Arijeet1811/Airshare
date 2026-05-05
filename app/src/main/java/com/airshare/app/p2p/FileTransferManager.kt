@@ -152,7 +152,7 @@ class FileTransferManager {
     suspend fun startReceiving(
         contentResolver: ContentResolver,
         scope: kotlinx.coroutines.CoroutineScope,
-        onReceiveRequest: suspend (String, Long, String, Int) -> Boolean, // fileName, size, senderName, fileCount
+        onReceiveRequest: suspend (String, Long, String, Int) -> Boolean,
         onProgress: (String, Long, Long) -> Unit,
         onTransferComplete: () -> Unit
     ) = withContext(Dispatchers.IO) {
@@ -164,7 +164,7 @@ class FileTransferManager {
 
             Log.i(TAG, "Waiting for incoming connections...")
 
-            while (true) { // Persistent accept loop
+            while (true) {
                 val socket = try {
                     serverSocket?.accept() ?: break
                 } catch (e: Exception) {
@@ -172,15 +172,16 @@ class FileTransferManager {
                     Log.w(TAG, "Accept error, continuing...", e)
                     continue
                 }
+
                 socket.soTimeout = SOCKET_TIMEOUT
 
-                // Handle transfer in separate coroutine so main accept loop doesn't block
+                // Handle in separate coroutine
                 scope.launch(Dispatchers.IO) {
                     try {
                         handleIncomingTransfer(socket, contentResolver, onReceiveRequest, onProgress)
                         onTransferComplete()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error in transfer handling", e)
+                        Log.e(TAG, "Error handling transfer", e)
                     }
                 }
             }
