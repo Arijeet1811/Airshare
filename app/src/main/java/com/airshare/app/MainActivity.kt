@@ -566,13 +566,34 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startAirShareService() {
-        val intent = Intent(this, AirShareService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+        // 1. Check if all required runtime permissions are granted
+        val allGranted = permissionsToRequest.all { permission ->
+            androidx.core.content.ContextCompat.checkSelfPermission(this, permission) == 
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
         }
-        LogUtil.i("MainActivity", "startAirShareService called")
+
+        if (!allGranted) {
+            LogUtil.w("MainActivity", "Cannot start service: Permissions missing")
+            // Optional: Re-trigger permission request if needed
+            // checkAndRequestPermissions()
+            return
+        }
+
+        // 2. Start the service safely based on API level
+        val intent = Intent(this, AirShareService::class.java)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            LogUtil.i("MainActivity", "startAirShareService success")
+        } catch (e: Exception) {
+            // Handle BackgroundStartRestriction (Android 12+) or other failures
+            LogUtil.e("MainActivity", "Failed to start service: ${e.message}")
+            Toast.makeText(this, "Service failed to start: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            serviceRunningState = false
+        }
     }
 
     private fun stopAirShareService() {

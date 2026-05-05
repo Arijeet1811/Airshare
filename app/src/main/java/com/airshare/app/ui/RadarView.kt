@@ -79,7 +79,7 @@ fun RadarView(
             }
     ) {
         val center = Offset(size.width / 2, size.height / 2)
-        val maxRadius = size.minDimension / 2.2f
+        val maxRadius = minOf(size.width, size.height) / 2.2f
 
         // Draw static circles with gradient stroke
         val radarColor = Color(0xFF34C759).copy(alpha = 0.15f)

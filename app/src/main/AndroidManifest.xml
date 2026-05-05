@@ -23,6 +23,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_NEARBY_DEVICES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
@@ -46,7 +47,7 @@
             android:name=".service.AirShareService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|dataSync" />
+            android:foregroundServiceType="connectedDevice|dataSync|nearbyDevices" />
 
         <activity
             android:name=".MainActivity"
