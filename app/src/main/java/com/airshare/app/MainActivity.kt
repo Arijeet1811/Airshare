@@ -17,6 +17,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.LaunchedEffect
@@ -161,9 +163,39 @@ class MainActivity : ComponentActivity() {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.Black),
+                            .background(
+                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color(0xFF0F172A),
+                                        Color(0xFF1E293B),
+                                        Color(0xFF020617)
+                                    )
+                                )
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
+                        // Branding Header
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 64.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "AirShare",
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White,
+                                letterSpacing = (-1).sp
+                            )
+                            Text(
+                                text = if (serviceRunningState) "Discoverable" else "Disconnected",
+                                fontSize = 14.sp,
+                                color = if (serviceRunningState) Color(0xFF34C759) else Color.White.copy(alpha = 0.5f),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
                         RadarView(
                             peers = peers,
                             onPeerTapped = { peer ->
@@ -176,15 +208,39 @@ class MainActivity : ComponentActivity() {
                         Column(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = 60.dp),
+                                .padding(bottom = 60.dp, start = 24.dp, end = 24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            // ✅ FIXED: Service Toggle Button - Always visible
-                            ServiceToggleButton(
-                                isRunning = serviceRunningState,
-                                onToggle = { toggleService() }
-                            )
-                            SelectFilesButton()
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(0.85f),
+                                color = Color.White.copy(alpha = 0.05f),
+                                shape = RoundedCornerShape(28.dp),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    width = 1.dp,
+                                    color = Color.White.copy(alpha = 0.1f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    ServiceToggleButton(
+                                        isRunning = serviceRunningState,
+                                        onToggle = { toggleService() }
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    SelectFilesButton()
+                                    
+                                    if (selectedUris.isNotEmpty()) {
+                                        Text(
+                                            text = "${selectedUris.size} files ready",
+                                            color = Color.White.copy(alpha = 0.5f),
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(top = 8.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         // Overlay
@@ -293,29 +349,46 @@ class MainActivity : ComponentActivity() {
         isRunning: Boolean,
         onToggle: () -> Unit
     ) {
+        val backgroundColor by animateColorAsState(
+            if (isRunning) Color(0xFF34C759) else Color.White.copy(alpha = 0.1f),
+            label = "ServiceToggleBg"
+        )
+        
         Button(
             onClick = onToggle,
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (isRunning) Color(0xFF34C759) else Color(0xFF007AFF)
+                containerColor = backgroundColor
             ),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.padding(bottom = 8.dp)
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 12.dp)
         ) {
-            Text(
-                text = if (isRunning) "⏹️ STOP Service" else "▶️ START Service",
-                color = Color.White
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = if (isRunning) "⏹️ Stop Node" else "▶️ Start Node",
+                    color = if (isRunning) Color.White else Color.White.copy(alpha = 0.9f),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            }
         }
     }
 
     @Composable
     private fun SelectFilesButton() {
-        Button(
+        OutlinedButton(
             onClick = { filePickerLauncher.launch("*/*") },
-            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
-            shape = RoundedCornerShape(12.dp)
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 12.dp)
         ) {
-            Text("📁 Select Files to Share", color = Color.White)
+            Text(
+                "📁 Select Artifacts", 
+                color = Color.White.copy(alpha = 0.8f),
+                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp
+            )
         }
     }
 
@@ -414,66 +487,74 @@ fun SecurityVerificationDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 Icon(
-                    imageVector = Icons.Default.Check, // Using check for "Security" feel
+                    imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
                     tint = Color(0xFF34C759),
-                    modifier = Modifier.padding(end = 8.dp)
+                    modifier = Modifier.size(48.dp)
                 )
-                Text("Security Verification")
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    "Secure Pairing",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
             }
         },
         text = {
-            Column {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    "Verify this device shows the same code as the other device:",
-                    style = MaterialTheme.typography.bodyMedium
+                    "Confirm the pairing code matches the other device to ensure a secure connection.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.7f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Gray.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
+                Spacer(modifier = Modifier.height(32.dp))
+                
+                Surface(
+                    color = Color.White.copy(alpha = 0.05f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
                 ) {
                     val displayFingerprint = if (senderFingerprint.length >= 8) {
-                        "${senderFingerprint.take(4)}-${senderFingerprint.drop(4)}"
+                        "${senderFingerprint.take(4)} ${senderFingerprint.drop(4)}"
                     } else senderFingerprint
 
                     Text(
                         text = displayFingerprint,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 2.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 4.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                        color = Color.White
                     )
                 }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    "Compare with the code on the sender's device. Do they match?",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
             }
         },
         confirmButton = {
             Button(
                 onClick = onVerify,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759))
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Codes Match")
+                Text("Verify & Connect", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = Color.Gray)
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Reject Connection", color = Color.White.copy(alpha = 0.4f))
             }
         },
-        containerColor = Color(0xFF1C1C1E),
+        containerColor = Color(0xFF0F172A),
         titleContentColor = Color.White,
-        textContentColor = Color.White
+        textContentColor = Color.White,
+        shape = RoundedCornerShape(32.dp)
     )
 }
 
@@ -486,31 +567,73 @@ fun TransferProgressIndicator(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f)),
+            .background(Color.Black.copy(alpha = 0.8f)),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(
-                progress = { progress },
-                color = Color(0xFF34C759),
-                strokeWidth = 8.dp,
-                modifier = Modifier.size(100.dp)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Transferring... ${(progress * 100).toInt()}%",
-                color = Color.White,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(24.dp))
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth(0.8f)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    progress = { 1f },
+                    color = Color.White.copy(alpha = 0.1f),
+                    strokeWidth = 6.dp,
+                    modifier = Modifier.size(160.dp)
+                )
+                CircularProgressIndicator(
+                    progress = { progress },
+                    color = Color(0xFF34C759),
+                    strokeWidth = 6.dp,
+                    modifier = Modifier.size(160.dp)
+                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "${(progress * 100).toInt()}%",
+                        color = Color.White,
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = "Complete",
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(48.dp))
+            
             Text(
                 text = fileName,
-                color = Color.White.copy(alpha = 0.7f),
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            Text(
+                text = "Transferring content...",
+                color = Color.White.copy(alpha = 0.4f),
                 fontSize = 13.sp
             )
-            Spacer(modifier = Modifier.height(12.dp))
-            TextButton(onClick = onCancel) {
-                Text("Cancel", color = Color.Red.copy(alpha = 0.8f), fontSize = 14.sp)
+            
+            Spacer(modifier = Modifier.height(48.dp))
+            
+            Button(
+                onClick = onCancel,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.White.copy(alpha = 0.1f)
+                ),
+                shape = RoundedCornerShape(20.dp),
+                contentPadding = PaddingValues(horizontal = 32.dp, vertical = 12.dp)
+            ) {
+                Text("Cancel Transfer", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
             }
         }
     }

@@ -2,10 +2,12 @@ package com.airshare.app.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.animation.core.EaseOutExpo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,28 +43,31 @@ fun AirDropOverlay(
             ) {
                 Card(
                     modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .clip(RoundedCornerShape(24.dp)),
+                        .fillMaxWidth(0.9f),
                     colors = CardDefaults.cardColors(
-                        containerColor = Color.Black.copy(alpha = 0.85f)
+                        containerColor = Color.White.copy(alpha = 0.1f)
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                    shape = RoundedCornerShape(28.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = 1.dp,
+                        color = Color.White.copy(alpha = 0.1f)
+                    )
                 ) {
                     Column(
                         modifier = Modifier
-                            .padding(20.dp)
+                            .padding(24.dp)
                             .fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Custom Wave Animation Placeholder (Simulation of Sea Wave)
                         SeaWaveAnimation()
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(20.dp))
 
                         Text(
                             text = peer.name,
                             color = Color.White,
-                            fontSize = 20.sp,
+                            fontSize = 22.sp,
                             fontWeight = FontWeight.Bold
                         )
 
@@ -71,29 +76,33 @@ fun AirDropOverlay(
                             totalSizeBytes >= 1_000L -> "%.1f KB".format(totalSizeBytes / 1_000f)
                             else -> "$totalSizeBytes B"
                         }
+                        
                         Text(
                             text = if (isSender) "Waiting for response..." 
-                                   else "${peer.name} wants to send $fileCount file${if (fileCount != 1) "s" else ""} ($sizeText)",
-                            color = Color.Gray,
-                            fontSize = 14.sp
+                                   else "Received $fileCount file${if (fileCount != 1) "s" else ""} • $sizeText",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 14.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
 
-                        Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(28.dp))
 
                         if (isSender) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(32.dp),
-                                color = Color.White,
-                                strokeWidth = 3.dp
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(20.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                            }
                             Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = "Waiting for ${peer.name} to accept...",
-                                color = Color.Gray,
-                                fontSize = 13.sp
-                            )
                             TextButton(onClick = onDismiss) {
-                                Text("Cancel", color = Color.Red.copy(alpha = 0.8f))
+                                Text("Cancel", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp)
                             }
                         } else {
                             Row(
@@ -103,19 +112,23 @@ fun AirDropOverlay(
                                 Button(
                                     onClick = onDismiss,
                                     modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
-                                    shape = RoundedCornerShape(12.dp)
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color.White.copy(alpha = 0.1f)
+                                    ),
+                                    shape = RoundedCornerShape(16.dp)
                                 ) {
-                                    Text("Decline")
+                                    Text("Decline", color = Color.White)
                                 }
 
                                 Button(
                                     onClick = { onAccept(peer) },
                                     modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
-                                    shape = RoundedCornerShape(12.dp)
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF34C759)
+                                    ),
+                                    shape = RoundedCornerShape(16.dp)
                                 ) {
-                                    Text("Accept", color = Color.White)
+                                    Text("Accept", color = Color.White, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -139,29 +152,49 @@ fun SeaWaveAnimation() {
 
     Box(
         modifier = Modifier
-            .size(64.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF007AFF).copy(alpha = 0.2f)),
+            .size(80.dp),
         contentAlignment = Alignment.Center
     ) {
-        // Simple procedural wave representation using pulsing bars or circles
         repeat(3) { index ->
             val scale by infiniteTransition.animateFloat(
-                initialValue = 0.5f,
-                targetValue = 1.2f,
+                initialValue = 0.4f,
+                targetValue = 1.0f,
                 animationSpec = infiniteRepeatable(
-                    animation = tween(1500, delayMillis = index * 400),
-                    repeatMode = RepeatMode.Reverse
+                    animation = tween(2000, delayMillis = index * 600, easing = EaseOutExpo),
+                    repeatMode = RepeatMode.Restart
                 ), label = "WaveScale"
+            )
+            val alpha by infiniteTransition.animateFloat(
+                initialValue = 0.6f,
+                targetValue = 0.0f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(2000, delayMillis = index * 600, easing = EaseOutExpo),
+                    repeatMode = RepeatMode.Restart
+                ), label = "WaveAlpha"
             )
             Box(
                 modifier = Modifier
-                    .size(64.dp * scale)
+                    .size(80.dp * scale)
                     .border(
-                        width = 2.dp,
-                        color = Color(0xFF007AFF).copy(alpha = 1f - (scale - 0.5f)),
-                        shape = RoundedCornerShape(16.dp)
+                        width = 1.5.dp,
+                        color = Color(0xFF34C759).copy(alpha = alpha),
+                        shape = RoundedCornerShape(40.dp)
                     )
+            )
+        }
+        
+        // Center icon
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(Color(0xFF34C759), RoundedCornerShape(20.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = androidx.compose.material.icons.Icons.Default.Share,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
             )
         }
     }

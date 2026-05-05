@@ -59,21 +59,19 @@ fun RadarView(
             .fillMaxSize()
             .pointerInput(peers) {
                 detectTapGestures { offset ->
-                    val width = size.width
-                    val height = size.height
-                    val center = Offset(width / 2f, height / 2f)
-                    val maxRadius = Math.min(width, height) / 2.5f
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val maxRadius = size.minDimension / 2.2f
 
                     peers.forEachIndexed { index, peer ->
                         val angle = (index * 137.5f) * (Math.PI / 180f)
                         val normalizedRssi = (peer.rssi.coerceIn(-100, -30) + 100) / 70f
-                        val radius = maxRadius * (1f - normalizedRssi * 0.8f).coerceIn(0.2f, 0.9f)
+                        val radius = maxRadius * (1f - normalizedRssi * 0.7f).coerceIn(0.25f, 0.95f)
                         
                         val px = center.x + radius * cos(angle).toFloat()
                         val py = center.y + radius * sin(angle).toFloat()
 
                         val distance = sqrt((offset.x - px) * (offset.x - px) + (offset.y - py) * (offset.y - py))
-                        if (distance <= 44.dp.toPx()) { // Increased touch target to 44dp for accessibility
+                        if (distance <= 48.dp.toPx()) {
                             onPeerTapped(peer)
                         }
                     }
@@ -81,83 +79,104 @@ fun RadarView(
             }
     ) {
         val center = Offset(size.width / 2, size.height / 2)
-        val maxRadius = size.minDimension / 2.5f
+        val maxRadius = size.minDimension / 2.2f
 
-        // Draw static circles
-        drawCircle(
-            color = Color.Green.copy(alpha = 0.1f),
-            radius = maxRadius,
-            center = center,
-            style = Stroke(width = 1.dp.toPx())
-        )
-        drawCircle(
-            color = Color.Green.copy(alpha = 0.1f),
-            radius = maxRadius * 0.66f,
-            center = center,
-            style = Stroke(width = 1.dp.toPx())
-        )
-        drawCircle(
-            color = Color.Green.copy(alpha = 0.1f),
-            radius = maxRadius * 0.33f,
-            center = center,
-            style = Stroke(width = 1.dp.toPx())
-        )
+        // Draw static circles with gradient stroke
+        val radarColor = Color(0xFF34C759).copy(alpha = 0.15f)
+        
+        repeat(4) { i ->
+            drawCircle(
+                color = radarColor,
+                radius = maxRadius * (1f - i * 0.25f),
+                center = center,
+                style = Stroke(width = 0.5.dp.toPx())
+            )
+        }
 
         // Draw pulsing circles
         drawCircle(
-            color = Color.Green.copy(alpha = (1f - pulse1.value) * 0.3f),
+            color = Color(0xFF34C759).copy(alpha = (1f - pulse1.value) * 0.2f),
             radius = maxRadius * pulse1.value,
             center = center,
-            style = Stroke(width = 2.dp.toPx())
+            style = Stroke(width = 1.dp.toPx())
         )
         drawCircle(
-            color = Color.Green.copy(alpha = (1f - pulse2.value) * 0.3f),
+            color = Color(0xFF34C759).copy(alpha = (1f - pulse2.value) * 0.2f),
             radius = maxRadius * pulse2.value,
             center = center,
-            style = Stroke(width = 2.dp.toPx())
+            style = Stroke(width = 1.dp.toPx())
         )
 
-        // Draw center point
+        // Draw center "Me" indicator
         drawCircle(
-            color = Color.Green,
-            radius = 8.dp.toPx(),
+            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                colors = listOf(Color(0xFF34C759), Color(0xFF22C55E).copy(alpha = 0f)),
+                center = center,
+                radius = 24.dp.toPx()
+            ),
+            radius = 24.dp.toPx(),
+            center = center
+        )
+        drawCircle(
+            color = Color.White,
+            radius = 4.dp.toPx(),
             center = center
         )
 
-        // Draw Peers as bright green dots
+        // Draw Peers as avatars
         peers.forEachIndexed { index, peer ->
-            // Distribute peers around the radar based on their index and RSSI
-            val angle = (index * 137.5f) * (Math.PI / 180f) // Golden angle distribution
-            // Map RSSI (-100 to -30) to radius (max to min)
+            val angle = (index * 137.5f) * (Math.PI / 180f)
             val normalizedRssi = (peer.rssi.coerceIn(-100, -30) + 100) / 70f
-            val radius = maxRadius * (1f - normalizedRssi * 0.8f).coerceIn(0.2f, 0.9f)
+            val radius = maxRadius * (1f - normalizedRssi * 0.7f).coerceIn(0.25f, 0.95f)
             
             val x = center.x + radius * cos(angle).toFloat()
             val y = center.y + radius * sin(angle).toFloat()
 
+            // Avatar background
+            val avatarRadius = 24.dp.toPx()
+            
+            // Proximity highlight
+            if (peer.isProximityTriggered) {
+                drawCircle(
+                    color = Color(0xFF34C759).copy(alpha = 0.3f),
+                    radius = avatarRadius + 8.dp.toPx(),
+                    center = Offset(x, y)
+                )
+            }
+
             drawCircle(
-                color = Color.Green,
-                radius = 6.dp.toPx(),
+                color = Color.White.copy(alpha = 0.15f),
+                radius = avatarRadius,
                 center = Offset(x, y)
             )
             
-            // Draw name below dot
+            drawCircle(
+                color = Color.White,
+                radius = avatarRadius,
+                center = Offset(x, y),
+                style = Stroke(width = 1.dp.toPx())
+            )
+
+            // Initial for avatar
+            val initial = peer.name.take(1).uppercase()
+            paint.textSize = 36f
+            paint.color = android.graphics.Color.WHITE
             drawContext.canvas.nativeCanvas.drawText(
-                peer.name,
+                initial,
                 x,
-                y + 22 + 6.dp.toPx(), // Adjust Y: 22px below dot center plus radius
+                y + 12f,
                 paint
             )
             
-            // Halo for triggered peers
-            if (peer.isProximityTriggered) {
-                drawCircle(
-                    color = Color.Green.copy(alpha = 0.4f),
-                    radius = 12.dp.toPx(),
-                    center = Offset(x, y),
-                    style = Stroke(width = 2.dp.toPx())
-                )
-            }
+            // Name below
+            paint.textSize = 24f
+            paint.color = android.graphics.Color.GRAY
+            drawContext.canvas.nativeCanvas.drawText(
+                peer.name,
+                x,
+                y + avatarRadius + 24f,
+                paint
+            )
         }
     }
 }
