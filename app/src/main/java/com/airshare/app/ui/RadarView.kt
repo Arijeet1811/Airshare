@@ -60,7 +60,7 @@ fun RadarView(
             .pointerInput(peers) {
                 detectTapGestures { offset ->
                     val center = Offset(size.width / 2f, size.height / 2f)
-                    val maxRadius = size.minDimension / 2.2f
+                    val maxRadius = minOf(size.width, size.height) / 2.2f
 
                     peers.forEachIndexed { index, peer ->
                         val angle = (index * 137.5f) * (Math.PI / 180f)
