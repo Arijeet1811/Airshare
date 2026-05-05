@@ -6,5 +6,6 @@ data class Peer(
     val rssi: Int,
     val isProximityTriggered: Boolean = false,
     val lastSeenMs: Long = System.currentTimeMillis(),
-    val ip: String? = null
+    val ip: String? = null,
+    val bleIdentifier: String = ""
 )

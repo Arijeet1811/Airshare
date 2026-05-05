@@ -21,6 +21,8 @@ import com.airshare.app.model.Peer
 fun AirDropOverlay(
     peer: Peer?,
     isSender: Boolean = false,
+    fileCount: Int = 0,
+    totalSizeBytes: Long = 0L,
     onDismiss: () -> Unit,
     onAccept: (Peer) -> Unit
 ) {
@@ -64,8 +66,13 @@ fun AirDropOverlay(
                             fontWeight = FontWeight.Bold
                         )
 
+                        val sizeText = when {
+                            totalSizeBytes >= 1_000_000L -> "%.1f MB".format(totalSizeBytes / 1_000_000f)
+                            totalSizeBytes >= 1_000L -> "%.1f KB".format(totalSizeBytes / 1_000f)
+                            else -> "$totalSizeBytes B"
+                        }
                         Text(
-                            text = if (isSender) "Waiting for response..." else "would like to share files",
+                            text = if (isSender) "Waiting for response..." else "wants to send $fileCount file${if (fileCount != 1) "s" else ""} ($sizeText)",
                             color = Color.Gray,
                             fontSize = 14.sp
                         )

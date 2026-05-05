@@ -11,7 +11,9 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.os.Build
 import android.os.ParcelUuid
+import android.provider.Settings
 import android.util.Log
 import com.airshare.app.model.Peer
 import kotlinx.coroutines.CoroutineScope
@@ -56,12 +58,16 @@ class BleManager(
             val existingPeer = _discoveredPeers.value.find { it.id == device.address }
             val wasAlreadyTriggered = existingPeer?.isProximityTriggered ?: false
 
+            val mfrData = result.scanRecord?.getManufacturerSpecificData(0xFFFF)
+            val bleIdentifier = mfrData?.joinToString("") { "%02x".format(it) } ?: device.address
+
             val newPeer = Peer(
                 id = device.address,
                 name = deviceName,
                 rssi = rssi,
                 isProximityTriggered = isClose,
-                lastSeenMs = System.currentTimeMillis()
+                lastSeenMs = System.currentTimeMillis(),
+                bleIdentifier = bleIdentifier
             )
 
             if (isClose && !wasAlreadyTriggered) {
@@ -169,9 +175,22 @@ class BleManager(
             .build()
 
         val deviceName = adapter?.name?.take(8) ?: "AirShare"
+        
+        val wifiMac = Settings.Secure.getString(
+            context.contentResolver,
+            "android_id"
+        ) ?: "000000000000"
+        // Encode first 6 chars of android_id as manufacturer data (company id 0xFFFF = test)
+        val macBytes = wifiMac.take(12).chunked(2).map {
+            it.toIntOrNull(16)?.toByte() ?: 0x00
+        }.toByteArray().let {
+            if (it.size < 6) it + ByteArray(6 - it.size) else it.take(6).toByteArray()
+        }
+
         val data = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .setIncludeDeviceName(true)
+            .addManufacturerData(0xFFFF, macBytes)
             .build()
 
         val scanResponse = AdvertiseData.Builder()

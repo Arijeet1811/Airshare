@@ -200,6 +200,8 @@ class MainActivity : ComponentActivity() {
                         AirDropOverlay(
                             peer = activeOverlayPeer,
                             isSender = incomingRequest == null && isSenderMode,
+                            fileCount = incomingRequest?.fileCount ?: 1,
+                            totalSizeBytes = incomingRequest?.fileSize ?: 0L,
                             onDismiss = { 
                                 if (incomingRequest != null) {
                                     incomingRequest.response.complete(false)
@@ -219,7 +221,10 @@ class MainActivity : ComponentActivity() {
                                                 Pair(uri, getFileName(uri))
                                             }
                                             airShareService?.setPendingFiles(filesToSend)
-                                            isSenderMode = true 
+                                            isSenderMode = true
+                                            // Immediately attempt to send if WiFi Direct is already connected,
+                                            // otherwise the WifiDirectManager callback will trigger it when ready
+                                            airShareService?.trySendNowIfConnected()
                                         } else {
                                             Toast.makeText(this@MainActivity, "Service not bound", Toast.LENGTH_SHORT).show()
                                         }
@@ -232,18 +237,27 @@ class MainActivity : ComponentActivity() {
 
                         when (val state = transferState) {
                             is TransferState.Transferring -> {
-                                TransferProgressIndicator(state.progress)
+                                TransferProgressIndicator(
+                                    progress = state.progress,
+                                    fileName = state.fileName,
+                                    onCancel = {
+                                        airShareService?.cancelTransfer()
+                                    }
+                                )
                             }
                             is TransferState.Success -> {
                                 var showSuccess by remember { mutableStateOf(true) }
                                 if (showSuccess) {
-                                    SuccessAnimation { 
-                                        showSuccess = false
-                                        // Reset dismissed peer id to allow new triggers
-                                        dismissedPeerId = null
-                                        manualPeer = null
-                                        isSenderMode = false
-                                    }
+                                    SuccessAnimation(
+                                        onStart = { performHapticFeedback() },
+                                        onComplete = {
+                                            showSuccess = false
+                                            // Reset dismissed peer id to allow new triggers
+                                            dismissedPeerId = null
+                                            manualPeer = null
+                                            isSenderMode = false
+                                        }
+                                    )
                                 }
                             }
                             is TransferState.Error -> {
@@ -260,8 +274,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Automatically resume discovery when user returns to the app
-        checkAndRequestPermissions()
     }
 
     override fun onDestroy() {
@@ -321,7 +333,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun TransferProgressIndicator(progress: Float) {
+fun TransferProgressIndicator(
+    progress: Float,
+    fileName: String = "",
+    onCancel: () -> Unit = {}
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -341,15 +357,26 @@ fun TransferProgressIndicator(progress: Float) {
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = fileName,
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 13.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            TextButton(onClick = onCancel) {
+                Text("Cancel", color = Color.Red.copy(alpha = 0.8f), fontSize = 14.sp)
+            }
         }
     }
 }
 
 @Composable
-fun SuccessAnimation(onComplete: () -> Unit) {
+fun SuccessAnimation(onStart: () -> Unit = {}, onComplete: () -> Unit) {
     val scale = remember { Animatable(0f) }
     
     LaunchedEffect(Unit) {
+        onStart()
         scale.animateTo(
             targetValue = 1.2f,
             animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)

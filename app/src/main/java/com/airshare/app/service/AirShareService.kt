@@ -68,30 +68,41 @@ class AirShareService : Service() {
         bleManager = BleManager(this) { peer ->
             wifiDirectManager.initiateDiscovery()
             serviceScope.launch(Dispatchers.IO) {
-                // Retry loop: try to match and connect up to 5 times with 2s gap
                 var connected = false
-                repeat(5) { attempt ->
+                repeat(6) { attempt ->
                     if (connected) return@repeat
                     kotlinx.coroutines.delay(2000)
                     val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
-                    val matchedDevice = wifiDevices.find { 
-                        it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true) 
+                    // Strategy 1: Try exact name match first
+                    var matchedDevice = wifiDevices.find {
+                        it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true)
+                    }
+                    // Strategy 2: If no name match, take the first available AirShare device
+                    // (works when only 2 phones are nearby — most common use case)
+                    if (matchedDevice == null && wifiDevices.size == 1) {
+                        matchedDevice = wifiDevices.first()
+                        android.util.Log.d("AirShareService",
+                            "Using only available WiFi Direct device: ${matchedDevice.deviceName}")
                     }
                     if (matchedDevice != null) {
-                        android.util.Log.d("AirShareService", 
-                            "Matched on attempt ${attempt + 1}: ${peer.name}")
+                        android.util.Log.d("AirShareService",
+                            "Connecting on attempt ${attempt + 1}: ${matchedDevice.deviceName}")
                         wifiDirectManager.connect(matchedDevice)
                         connected = true
                     } else {
-                        android.util.Log.w("AirShareService", 
-                            "Attempt ${attempt + 1}: no match for ${peer.name}, retrying...")
-                        // Re-trigger discovery on each retry
+                        android.util.Log.w("AirShareService",
+                            "Attempt ${attempt + 1}: ${wifiDevices.size} WiFi devices found, " +
+                            "none matched peer: ${peer.name}. Retrying discovery...")
                         wifiDirectManager.initiateDiscovery()
                     }
                 }
                 if (!connected) {
-                    android.util.Log.e("AirShareService", 
-                        "Failed to match WiFi Direct device for BLE peer: ${peer.name}")
+                    android.util.Log.e("AirShareService",
+                        "Auto-connect failed after 6 attempts for peer: ${peer.name}")
+                    // Reset proximity trigger so user can tap manually on radar
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        _transferState.value = TransferState.Idle
+                    }
                 }
             }
         }
@@ -115,6 +126,17 @@ class AirShareService : Service() {
 
     fun setPendingFiles(files: List<Pair<Uri, String>>) {
         pendingFiles = files
+    }
+
+    fun trySendNowIfConnected() {
+        wifiDirectManager.requestConnectionInfo()
+    }
+
+    fun cancelTransfer() {
+        _transferState.value = TransferState.Idle
+        // Cancel all running coroutines except the main serviceJob
+        // by cancelling the current transfer coroutine
+        // For now reset state — socket will timeout on its own
     }
 
     fun startReceiving() {
@@ -178,10 +200,19 @@ class AirShareService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_RESTART_BLE) {
+            bleManager.stopDiscovery()
+            kotlinx.coroutines.GlobalScope.launch {
+                kotlinx.coroutines.delay(500)
+                bleManager.startDiscovery()
+            }
+            return START_STICKY
+        }
         isRunning = true
         startForegroundService()
         bleManager.startDiscovery()
         startReceiving()
+        schedulePeriodicBleRestart()
         return START_STICKY
     }
 
@@ -189,6 +220,7 @@ class AirShareService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        cancelPeriodicBleRestart()
         bleManager.stopDiscovery()
         wifiDirectManager.unregisterReceiver(this)
         wifiDirectManager.cleanup()
@@ -251,10 +283,44 @@ class AirShareService : Service() {
         notificationManager?.notify(NOTIFICATION_ID, createNotification(content))
     }
 
+    private fun schedulePeriodicBleRestart() {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val intent = Intent(this, AirShareService::class.java).apply {
+            action = ACTION_RESTART_BLE
+        }
+        val pendingIntent = android.app.PendingIntent.getService(
+            this, 0, intent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+            android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.setRepeating(
+            android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            android.os.SystemClock.elapsedRealtime() + 10 * 60 * 1000,
+            10 * 60 * 1000,
+            pendingIntent
+        )
+    }
+
+    private fun cancelPeriodicBleRestart() {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val intent = Intent(this, AirShareService::class.java).apply {
+            action = ACTION_RESTART_BLE
+        }
+        val pendingIntent = android.app.PendingIntent.getService(
+            this, 0, intent,
+            android.app.PendingIntent.FLAG_NO_CREATE or
+            android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        if (pendingIntent != null) {
+            alarmManager.cancel(pendingIntent)
+        }
+    }
+
     companion object {
         private const val CHANNEL_ID = "AirShareServiceChannel"
         private const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "com.airshare.app.service.STOP"
+        const val ACTION_RESTART_BLE = "com.airshare.app.service.RESTART_BLE"
         
         @Volatile
         var isRunning = false
