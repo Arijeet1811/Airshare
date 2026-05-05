@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import android.net.Uri
 import java.io.File
 
@@ -102,6 +104,7 @@ class AirShareService : Service() {
                     is TransferState.Success -> updateNotification("Transfer successful!")
                     is TransferState.Error -> updateNotification("Error: ${state.message}")
                     is TransferState.Request -> updateNotification("Incoming request: ${state.fileName}")
+                    is TransferState.SecurityVerification -> updateNotification("Verifying security code...")
                 }
             }
         }
@@ -168,7 +171,7 @@ class AirShareService : Service() {
                     _transferState.value = TransferState.Success
                     // Auto reset after success
                     serviceScope.launch {
-                        kotlinx.coroutines.delay(2500)
+                delay(2500)
                         _transferState.compareAndSet(TransferState.Success, TransferState.Idle)
                     }
                 }
@@ -202,20 +205,24 @@ class AirShareService : Service() {
                             response = deferred
                         )
                         deferred.await()
+                    },
+                    onProgress = { index, sent, total ->
+                        val progress = sent.toFloat() / (if(total == 0L) 1L else total)
+                        if (index < files.size) {
+                            _transferState.value = TransferState.Transferring(progress, files[index].second)
+                        }
                     }
-                ) { index, sent, total ->
-                    val progress = sent.toFloat() / (if(total == 0L) 1L else total)
-                    _transferState.value = TransferState.Transferring(progress, files[index].second)
-                }
+                )
                 
                 result.onSuccess {
                     _transferState.value = TransferState.Success
                     success = true
                 }.onFailure { e ->
+                    LogUtil.e("AirShareService", "Send attempt $attempt failed", e)
                     if (attempt == maxAttempts) {
                         _transferState.value = TransferState.Error(e.message ?: "Send failed")
                     } else {
-                        kotlinx.coroutines.delay(2000)
+                        delay(2000)
                     }
                 }
             }
@@ -231,7 +238,7 @@ class AirShareService : Service() {
         if (intent?.action == ACTION_RESTART_BLE) {
             bleManager.stopDiscovery()
             serviceScope.launch {
-                kotlinx.coroutines.delay(800)
+                delay(800)
                 bleManager.startDiscovery()
             }
             return START_STICKY
@@ -247,7 +254,7 @@ class AirShareService : Service() {
             // Now connect securely since user confirmed
             serviceScope.launch(Dispatchers.IO) {
                 wifiDirectManager.initiateDiscovery()
-                kotlinx.coroutines.delay(2000)
+                delay(2000)
                 val matchedDevice = wifiDirectManager.discoveredWifiDevices.value.find {
                     it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true)
                 } ?: wifiDirectManager.discoveredWifiDevices.value.find { dev ->

@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import com.airshare.app.util.LogUtil
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.security.MessageDigest
 import com.airshare.app.BuildConfig
@@ -128,22 +129,24 @@ class FileTransferManager {
                 throw SecurityException("User cancelled transfer due to fingerprint mismatch")
             }
 
-            // 2. Send File Count
-            outputStream.writeInt(files.size)
+        // Send file count
+        outputStream.writeInt(files.size)
+        outputStream.flush()
+
+        // Send each file
+        for ((index, file) in files.withIndex()) {
+            val (uri, displayName) = file
+            // Generate NEW session key for EACH file
+            val fileSessionKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+            val encryptedSessionKey = encryptSessionKey(fileSessionKey, publicKey)
+            
+            // Send encrypted key before each file
+            outputStream.writeInt(encryptedSessionKey.size)
+            outputStream.write(encryptedSessionKey)
             outputStream.flush()
 
-            files.forEachIndexed { index, (uri, displayName) ->
-                // Generate NEW session key for EACH file
-                val fileSessionKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
-                val encryptedSessionKey = encryptSessionKey(fileSessionKey, publicKey)
-                
-                // Send encrypted key before each file
-                outputStream.writeInt(encryptedSessionKey.size)
-                outputStream.write(encryptedSessionKey)
-                outputStream.flush()
-
-                sendSingleFile(contentResolver, uri, displayName, outputStream, inputStream, index, fileSessionKey, onProgress)
-            }
+            sendSingleFile(contentResolver, uri, displayName, outputStream, inputStream, index, fileSessionKey, onProgress)
+        }
 
             Result.success(Unit)
         } catch (e: Exception) {

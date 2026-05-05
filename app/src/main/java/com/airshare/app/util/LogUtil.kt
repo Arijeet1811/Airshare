@@ -17,6 +17,14 @@ object LogUtil {
     fun w(tag: String, message: String) {
         Log.w(tag, message)
     }
+
+    fun w(tag: String, message: String, throwable: Throwable? = null) {
+        if (throwable != null) {
+            Log.w(tag, message, throwable)
+        } else {
+            Log.w(tag, message)
+        }
+    }
     
     fun e(tag: String, message: String, throwable: Throwable? = null) {
         if (throwable != null) {
