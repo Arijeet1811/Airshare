@@ -123,7 +123,7 @@ class FileTransferManager {
                 fileCipher.init(Cipher.ENCRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
 
                 val fileInputStream = contentResolver.openInputStream(uri) ?: return@forEachIndexed
-                val buffer = ByteArray(1024)
+                val buffer = ByteArray(8192)
                 var bytesRead: Int
                 var totalBytesProcessed = 0L
 
@@ -163,7 +163,6 @@ class FileTransferManager {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val serverSocket = ServerSocket(PORT)
         runCatching {
-            serverSocket.soTimeout = SOCKET_TIMEOUT
             val socket = serverSocket.accept()
             socket.setSoTimeout(SOCKET_TIMEOUT)
             
@@ -244,7 +243,7 @@ class FileTransferManager {
                         fileCipher.init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
 
                         val encryptedFileSize = (fileSize + 16).toInt()
-                        val buffer = ByteArray(1024)
+                        val buffer = ByteArray(8192)
                         var totalBytesReceived = 0L
                         
                         while (totalBytesReceived < encryptedFileSize) {

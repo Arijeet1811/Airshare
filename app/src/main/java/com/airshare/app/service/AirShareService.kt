@@ -54,15 +54,27 @@ class AirShareService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        bleManager = BleManager(this) { peer ->
-            wifiDirectManager.initiateDiscovery()
-        }
         wifiDirectManager = WifiDirectManager(this) { info ->
             if (info.groupFormed && !info.isGroupOwner) {
                 val targetHost = info.groupOwnerAddress.hostAddress
                 if (pendingFiles.isNotEmpty()) {
                     sendFiles(targetHost, pendingFiles)
                     pendingFiles = emptyList() // Clear after sending
+                }
+            }
+        }
+        wifiDirectManager.registerReceiver(this)
+
+        bleManager = BleManager(this) { peer ->
+            wifiDirectManager.initiateDiscovery()
+            serviceScope.launch(Dispatchers.IO) {
+                kotlinx.coroutines.delay(2000)
+                val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
+                val matchedDevice = wifiDevices.find { it.deviceName == peer.name }
+                if (matchedDevice != null) {
+                    wifiDirectManager.connect(matchedDevice)
+                } else {
+                    android.util.Log.w("AirShareService", "No WiFi Direct device matched BLE peer: ${peer.name}")
                 }
             }
         }
@@ -161,6 +173,7 @@ class AirShareService : Service() {
     override fun onDestroy() {
         isRunning = false
         bleManager.stopDiscovery()
+        wifiDirectManager.unregisterReceiver(this)
         wifiDirectManager.cleanup()
         serviceJob.cancel()
         super.onDestroy()
