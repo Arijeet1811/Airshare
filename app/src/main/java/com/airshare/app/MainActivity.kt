@@ -175,25 +175,57 @@ class MainActivity : ComponentActivity() {
                         contentAlignment = Alignment.Center
                     ) {
                         // Branding Header
-                        Column(
+                        Row(
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
-                                .padding(top = 64.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                                .fillMaxWidth()
+                                .padding(top = 64.dp, start = 32.dp, end = 32.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "AirShare",
-                                fontSize = 32.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White,
-                                letterSpacing = (-1).sp
-                            )
-                            Text(
-                                text = if (serviceRunningState) "Discoverable" else "Disconnected",
-                                fontSize = 14.sp,
-                                color = if (serviceRunningState) Color(0xFF34C759) else Color.White.copy(alpha = 0.5f),
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Column {
+                                Text(
+                                    text = "AirShare",
+                                    fontSize = 28.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    letterSpacing = (-1).sp
+                                )
+                                Text(
+                                    text = if (serviceRunningState) "Discoverable" else "Disconnected",
+                                    fontSize = 13.sp,
+                                    color = if (serviceRunningState) Color(0xFF34C759) else Color.White.copy(alpha = 0.4f),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            
+                            // User Identity Badge
+                            Surface(
+                                color = Color.White.copy(alpha = 0.1f),
+                                shape = RoundedCornerShape(16.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(
+                                                if (serviceRunningState) Color(0xFF34C759) else Color.Gray,
+                                                RoundedCornerShape(4.dp)
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = com.airshare.app.util.DeviceUtils.getDeviceName(this@MainActivity),
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
 
                         RadarView(

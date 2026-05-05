@@ -123,6 +123,19 @@ fun RadarView(
             center = center
         )
 
+        // Draw "Looking for devices" message if list is empty
+        if (peers.isEmpty()) {
+            paint.textSize = 30f
+            paint.color = android.graphics.Color.GRAY
+            paint.alpha = (127 * (1f - pulse1.value)).toInt()
+            drawContext.canvas.nativeCanvas.drawText(
+                "Looking for artifacts...",
+                center.x,
+                center.y + maxRadius + 40.dp.toPx(),
+                paint
+            )
+        }
+
         // Draw Peers as avatars
         peers.forEachIndexed { index, peer ->
             val angle = (index * 137.5f) * (Math.PI / 180f)
