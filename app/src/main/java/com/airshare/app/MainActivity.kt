@@ -36,6 +36,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import android.provider.Settings
 import android.os.PowerManager
 import android.net.ConnectivityManager
@@ -435,7 +438,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SelectFilesButton() {
         OutlinedButton(
-            onClick = { filePickerLauncher.launch("*/*") },
+            onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
             border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier.fillMaxWidth(),
@@ -510,6 +513,8 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onResume() {
         super.onResume()
         // Update service state when returning to app
         serviceRunningState = AirShareService.isRunning
