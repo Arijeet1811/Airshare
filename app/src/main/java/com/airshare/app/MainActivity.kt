@@ -42,6 +42,7 @@ import com.airshare.app.model.TransferState
 import com.airshare.app.service.AirShareService
 import com.airshare.app.ui.AirDropOverlay
 import com.airshare.app.ui.RadarView
+import com.airshare.app.util.LogUtil
 
 class MainActivity : ComponentActivity() {
 
@@ -52,6 +53,9 @@ class MainActivity : ComponentActivity() {
     private var selectedUris by mutableStateOf<List<android.net.Uri>>(emptyList())
     private var manualSelectedPeer by mutableStateOf<Peer?>(null)
     private var isManualSenderMode by mutableStateOf(false)
+    
+    // Track service state for UI
+    private var serviceRunningState by mutableStateOf(false)
 
     private val permissionsToRequest = mutableListOf<String>().apply {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -75,9 +79,12 @@ class MainActivity : ComponentActivity() {
     ) { permissions ->
         val allGranted = permissions.entries.all { it.value }
         if (allGranted) {
+            LogUtil.i("MainActivity", "All permissions granted, starting service")
             startAirShareService()
+            serviceRunningState = true
             Toast.makeText(this, "AirShare is now active", Toast.LENGTH_SHORT).show()
         } else {
+            LogUtil.w("MainActivity", "Permissions denied")
             Toast.makeText(this, "Permissions required for AirShare", Toast.LENGTH_LONG).show()
         }
     }
@@ -87,11 +94,15 @@ class MainActivity : ComponentActivity() {
             val binder = service as AirShareService.LocalBinder
             airShareService = binder.getService()
             isBound = true
+            serviceRunningState = AirShareService.isRunning
+            LogUtil.d("MainActivity", "Service connected, running=${serviceRunningState}")
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             isBound = false
             airShareService = null
+            serviceRunningState = false
+            LogUtil.d("MainActivity", "Service disconnected")
         }
     }
 
@@ -168,7 +179,11 @@ class MainActivity : ComponentActivity() {
                                 .padding(bottom = 60.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            ServiceToggleButton()
+                            // ✅ FIXED: Service Toggle Button - Always visible
+                            ServiceToggleButton(
+                                isRunning = serviceRunningState,
+                                onToggle = { toggleService() }
+                            )
                             SelectFilesButton()
                         }
 
@@ -229,7 +244,36 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        checkAndRequestPermissions()
+        // ✅ AUTO-START: Check permissions and start service automatically
+        checkAndStartService()
+    }
+
+    // ✅ NEW: Separate function to check permissions and auto-start
+    private fun checkAndStartService() {
+        val allGranted = permissionsToRequest.all { 
+            androidx.core.content.ContextCompat.checkSelfPermission(this, it) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (allGranted) {
+            LogUtil.i("MainActivity", "Permissions already granted, auto-starting service")
+            startAirShareService()
+            serviceRunningState = true
+        } else {
+            LogUtil.i("MainActivity", "Requesting permissions")
+            permissionLauncher.launch(permissionsToRequest.toTypedArray())
+        }
+    }
+
+    // ✅ NEW: Toggle service function
+    private fun toggleService() {
+        if (serviceRunningState) {
+            LogUtil.i("MainActivity", "User stopping service")
+            stopAirShareService()
+            serviceRunningState = false
+        } else {
+            LogUtil.i("MainActivity", "User starting service")
+            startAirShareService()
+            serviceRunningState = true
+        }
     }
 
     private fun handleSendFiles() {
@@ -245,20 +289,22 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun ServiceToggleButton() {
-        var serviceRunning by remember { mutableStateOf(AirShareService.isRunning) }
+    private fun ServiceToggleButton(
+        isRunning: Boolean,
+        onToggle: () -> Unit
+    ) {
         Button(
-            onClick = {
-                if (AirShareService.isRunning) stopAirShareService() else startAirShareService()
-                serviceRunning = !serviceRunning
-            },
+            onClick = onToggle,
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (serviceRunning) Color(0xFF34C759) else Color(0xFF007AFF)
+                containerColor = if (isRunning) Color(0xFF34C759) else Color(0xFF007AFF)
             ),
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.padding(bottom = 8.dp)
         ) {
-            Text(if (serviceRunning) "Service: ON" else "Start Background Service", color = Color.White)
+            Text(
+                text = if (isRunning) "⏹️ STOP Service" else "▶️ START Service",
+                color = Color.White
+            )
         }
     }
 
@@ -269,7 +315,7 @@ class MainActivity : ComponentActivity() {
             colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Text("Select Files to Share", color = Color.White)
+            Text("📁 Select Files to Share", color = Color.White)
         }
     }
 
@@ -290,6 +336,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Update service state when returning to app
+        serviceRunningState = AirShareService.isRunning
     }
 
     override fun onDestroy() {
@@ -338,6 +386,7 @@ class MainActivity : ComponentActivity() {
         } else {
             startService(intent)
         }
+        LogUtil.i("MainActivity", "startAirShareService called")
     }
 
     private fun stopAirShareService() {
@@ -345,6 +394,7 @@ class MainActivity : ComponentActivity() {
             action = AirShareService.ACTION_STOP
         }
         startService(intent)
+        LogUtil.i("MainActivity", "stopAirShareService called")
     }
 }
 
