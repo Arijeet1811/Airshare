@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.os.Binder
 import android.os.Build
@@ -146,7 +147,7 @@ class AirShareService : Service() {
                     contentResolver = contentResolver,
                     onReceiveRequest = { fileName, fileSize ->
                         val deferred = CompletableDeferred<Boolean>()
-                        _transferState.value = TransferState.Request(fileName, fileSize, deferred)
+                        _transferState.value = TransferState.Request(fileName, fileSize, 1, deferred)
                         val result = deferred.await()
                         if (!result) {
                             _transferState.value = TransferState.Idle
