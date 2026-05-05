@@ -201,6 +201,14 @@ class MainActivity : ComponentActivity() {
 
                         // Transfer Status Overlays
                         when (val state = transferState) {
+                            is TransferState.SecurityVerification -> {
+                                SecurityVerificationDialog(
+                                    senderFingerprint = state.peerFingerprint,
+                                    receiverFingerprint = state.ourFingerprint,
+                                    onVerify = { state.response.complete(true) },
+                                    onDismiss = { state.response.complete(false) }
+                                )
+                            }
                             is TransferState.Transferring -> {
                                 TransferProgressIndicator(
                                     progress = state.progress,
@@ -338,6 +346,79 @@ class MainActivity : ComponentActivity() {
         }
         startService(intent)
     }
+}
+
+@Composable
+fun SecurityVerificationDialog(
+    senderFingerprint: String,
+    receiverFingerprint: String,
+    onVerify: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Check, // Using check for "Security" feel
+                    contentDescription = null,
+                    tint = Color(0xFF34C759),
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+                Text("Security Verification")
+            }
+        },
+        text = {
+            Column {
+                Text(
+                    "Verify this device shows the same code as the other device:",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Gray.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val displayFingerprint = if (senderFingerprint.length >= 8) {
+                        "${senderFingerprint.take(4)}-${senderFingerprint.drop(4)}"
+                    } else senderFingerprint
+
+                    Text(
+                        text = displayFingerprint,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    "Compare with the code on the sender's device. Do they match?",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onVerify,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759))
+            ) {
+                Text("Codes Match")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = Color.Gray)
+            }
+        },
+        containerColor = Color(0xFF1C1C1E),
+        titleContentColor = Color.White,
+        textContentColor = Color.White
+    )
 }
 
 @Composable

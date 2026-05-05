@@ -13,8 +13,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
-import android.provider.Settings
-import android.util.Log
+import com.airshare.app.util.LogUtil
 import com.airshare.app.model.Peer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +40,20 @@ class BleManager(
     private val SERVICE_UUID = UUID.fromString("0000feaa-0000-1000-8000-00805f9b34fb")
     private val PROXIMITY_THRESHOLD = -70 // Slightly relaxed from -65 for better real-world performance
 
+    companion object {
+        private const val AIRSHARE_MANUFACTURER_ID = 0x07CD
+    }
+
+    private val sessionId: String by lazy {
+        val prefs = context.getSharedPreferences("airshare_prefs", Context.MODE_PRIVATE)
+        var id = prefs.getString("device_id", null)
+        if (id == null) {
+            id = UUID.randomUUID().toString().take(12)
+            prefs.edit().putString("device_id", id).apply()
+        }
+        id
+    }
+
     private val managerScope = CoroutineScope(Dispatchers.Main)
     private var discoveryJob: Job? = null
 
@@ -53,7 +66,7 @@ class BleManager(
             val deviceName = result.scanRecord?.deviceName ?: device.address ?: "Unknown Device"
             val rssi = result.rssi
 
-            val mfrData = result.scanRecord?.getManufacturerSpecificData(0xFFFF)
+            val mfrData = result.scanRecord?.getManufacturerSpecificData(AIRSHARE_MANUFACTURER_ID)
             val bleIdentifier = mfrData?.joinToString("") { "%02x".format(it) } ?: device.address
 
             val isClose = rssi > PROXIMITY_THRESHOLD
@@ -75,17 +88,17 @@ class BleManager(
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e("BleManager", "Scan failed with error code: $errorCode")
+            LogUtil.e("BleManager", "Scan failed with error code: $errorCode")
         }
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            Log.i("BleManager", "BLE Advertising started successfully")
+            LogUtil.i("BleManager", "BLE Advertising started successfully")
         }
 
         override fun onStartFailure(errorCode: Int) {
-            Log.e("BleManager", "BLE Advertising failed: $errorCode")
+            LogUtil.e("BleManager", "BLE Advertising failed: $errorCode")
         }
     }
 
@@ -106,7 +119,7 @@ class BleManager(
 
     fun startDiscovery() {
         if (adapter == null || !adapter.isEnabled) {
-            Log.w("BleManager", "Bluetooth is disabled")
+            LogUtil.w("BleManager", "Bluetooth is disabled")
             return
         }
 
@@ -145,14 +158,14 @@ class BleManager(
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        val manufacturerData = Settings.Secure.getString(context.contentResolver, "android_id")
-            ?.take(12)?.chunked(2)?.map { it.toIntOrNull(16)?.toByte() ?: 0x00 }?.toByteArray()
-            ?: ByteArray(6)
+        val idBytes = sessionId.take(12).chunked(2).map {
+            it.toIntOrNull(16)?.toByte() ?: 0x00
+        }.toByteArray()
 
         val data = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .setIncludeDeviceName(true)
-            .addManufacturerData(0xFFFF, manufacturerData)
+            .addManufacturerData(AIRSHARE_MANUFACTURER_ID, idBytes)
             .build()
 
         adapter.bluetoothLeAdvertiser.startAdvertising(settings, data, advertiseCallback)
@@ -162,15 +175,25 @@ class BleManager(
     private fun startScanning() {
         if (isScanning || adapter?.bluetoothLeScanner == null) return
 
-        val filter = ScanFilter.Builder()
+        // Add filter for our specific manufacturer ID
+        val manufacturerFilter = ScanFilter.Builder()
+            .setManufacturerData(AIRSHARE_MANUFACTURER_ID, null, null)
+            .build()
+        
+        val serviceFilter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
 
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .build()
 
-        adapter.bluetoothLeScanner.startScan(listOf(filter), settings, scanCallback)
+        adapter.bluetoothLeScanner.startScan(
+            listOf(serviceFilter, manufacturerFilter), 
+            settings, 
+            scanCallback
+        )
         isScanning = true
     }
 
