@@ -47,7 +47,7 @@
             android:name=".service.AirShareService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|dataSync|nearbyDevices" />
+            android:foregroundServiceType="connectedDevice|dataSync|nearby_devices" />
 
         <activity
             android:name=".MainActivity"
