@@ -205,50 +205,53 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
                                 .fillMaxWidth()
-                                .padding(top = topPadding + 16.dp, start = 32.dp, end = 32.dp),
+                                .padding(top = topPadding + 24.dp, start = 24.dp, end = 24.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
                                 Text(
                                     text = "AirShare",
-                                    fontSize = 28.sp,
-                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Black,
                                     color = Color.White,
-                                    letterSpacing = (-1).sp
+                                    letterSpacing = (-1.5).sp
                                 )
-                                Text(
-                                    text = if (serviceRunningState) "Discoverable" else "Disconnected",
-                                    fontSize = 13.sp,
-                                    color = if (serviceRunningState) Color(0xFF34C759) else Color.White.copy(alpha = 0.4f),
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(
+                                                if (serviceRunningState) Color(0xFF34C759) else Color.White.copy(alpha = 0.2f),
+                                                RoundedCornerShape(3.dp)
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (serviceRunningState) "Active Node" else "Offline",
+                                        fontSize = 12.sp,
+                                        color = if (serviceRunningState) Color(0xFF34C759) else Color.White.copy(alpha = 0.3f),
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                }
                             }
                             
                             // User Identity Badge
                             Surface(
-                                color = Color.White.copy(alpha = 0.1f),
-                                shape = RoundedCornerShape(16.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                                color = Color.White.copy(alpha = 0.05f),
+                                shape = RoundedCornerShape(20.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.05f))
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .background(
-                                                if (serviceRunningState) Color(0xFF34C759) else Color.Gray,
-                                                RoundedCornerShape(4.dp)
-                                            )
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = com.airshare.app.util.DeviceUtils.getDeviceName(this@MainActivity),
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
+                                        color = Color.White.copy(alpha = 0.9f),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.ExtraBold
                                     )
                                 }
                             }
@@ -267,22 +270,24 @@ class MainActivity : ComponentActivity() {
                         Column(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = bottomPadding + 24.dp, start = 24.dp, end = 24.dp),
+                                .padding(bottom = bottomPadding + 32.dp, start = 24.dp, end = 24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             BatteryDataSaverPrompt()
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(20.dp))
                             Surface(
-                                modifier = Modifier.fillMaxWidth(0.85f),
-                                color = Color.White.copy(alpha = 0.05f),
-                                shape = RoundedCornerShape(28.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Color.White.copy(alpha = 0.03f),
+                                shape = RoundedCornerShape(32.dp),
                                 border = androidx.compose.foundation.BorderStroke(
                                     width = 1.dp,
-                                    color = Color.White.copy(alpha = 0.1f)
+                                    brush = Brush.verticalGradient(
+                                        colors = listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)
+                                    )
                                 )
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(16.dp),
+                                    modifier = Modifier.padding(20.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     ServiceToggleButton(
@@ -293,12 +298,19 @@ class MainActivity : ComponentActivity() {
                                     SelectFilesButton()
                                     
                                     if (selectedUris.isNotEmpty()) {
-                                        Text(
-                                            text = "${selectedUris.size} files ready",
-                                            color = Color.White.copy(alpha = 0.5f),
-                                            fontSize = 11.sp,
-                                            modifier = Modifier.padding(top = 8.dp)
-                                        )
+                                        Surface(
+                                            modifier = Modifier.padding(top = 12.dp),
+                                            color = Color(0xFF34C759).copy(alpha = 0.1f),
+                                            shape = RoundedCornerShape(full = true)
+                                        ) {
+                                            Text(
+                                                text = "${selectedUris.size} Artifacts Prepared",
+                                                color = Color(0xFF34C759),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }

@@ -12,11 +12,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.dp
 import com.airshare.app.model.Peer
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+
+class PeerAnimationState(val peerId: String) {
+    val scale = Animatable(0f)
+    val alpha = Animatable(0f)
+}
 
 @Composable
 fun RadarView(
@@ -24,26 +31,41 @@ fun RadarView(
     onPeerTapped: (Peer) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     val infiniteTransition = rememberInfiniteTransition(label = "RadarPulse")
     
-    // Pulse animations
-    val pulse1 = infiniteTransition.animateFloat(
+    // Smooth pulse animation
+    val pulseValue by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
+            animation = tween(3000, easing = EaseOutExpo),
             repeatMode = RepeatMode.Restart
-        ), label = "pulse1"
+        ), label = "pulse"
     )
-    
-    val pulse2 = infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, delayMillis = 1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ), label = "pulse2"
-    )
+
+    // Animation states for peers
+    val peerStates = remember { mutableStateMapOf<String, PeerAnimationState>() }
+
+    // Sync peer states with peers list
+    LaunchedEffect(peers) {
+        val currentIds = peers.map { it.id }.toSet()
+        // Remove old
+        peerStates.keys.retainAll { it in currentIds }
+        // Add new
+        peers.forEach { peer ->
+            if (peer.id !in peerStates) {
+                val state = PeerAnimationState(peer.id)
+                peerStates[peer.id] = state
+                // Animate entrance
+                state.scale.animateTo(
+                    targetValue = 1f,
+                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
+                )
+                state.alpha.animateTo(1f, animationSpec = tween(500))
+            }
+        }
+    }
 
     val paint = remember {
         Paint().apply {
@@ -72,6 +94,7 @@ fun RadarView(
 
                         val distance = sqrt((offset.x - px) * (offset.x - px) + (offset.y - py) * (offset.y - py))
                         if (distance <= 48.dp.toPx()) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             onPeerTapped(peer)
                         }
                     }
@@ -81,9 +104,21 @@ fun RadarView(
         val center = Offset(size.width / 2, size.height / 2)
         val maxRadius = minOf(size.width, size.height) / 2.2f
 
-        // Draw static circles with gradient stroke
-        val radarColor = Color(0xFF34C759).copy(alpha = 0.15f)
-        
+        // Draw dot-matrix grid (Nothing aesthetic)
+        val dotColor = Color.White.copy(alpha = 0.05f)
+        val spacing = 24.dp.toPx()
+        for (x in 0..(size.width / spacing).toInt()) {
+            for (y in 0..(size.height / spacing).toInt()) {
+                drawCircle(
+                    color = dotColor,
+                    radius = 1.dp.toPx(),
+                    center = Offset(x * spacing, y * spacing)
+                )
+            }
+        }
+
+        // Draw static circles
+        val radarColor = Color(0xFF34C759).copy(alpha = 0.1f)
         repeat(4) { i ->
             drawCircle(
                 color = radarColor,
@@ -93,28 +128,30 @@ fun RadarView(
             )
         }
 
-        // Draw pulsing circles
+        // Smoother pulsing circles
         drawCircle(
-            color = Color(0xFF34C759).copy(alpha = (1f - pulse1.value) * 0.2f),
-            radius = maxRadius * pulse1.value,
+            color = Color(0xFF34C759).copy(alpha = (1f - pulseValue) * 0.15f),
+            radius = maxRadius * pulseValue,
             center = center,
-            style = Stroke(width = 1.dp.toPx())
+            style = Stroke(width = 1.5.dp.toPx())
         )
+        
+        val delayedPulse = (pulseValue + 0.5f) % 1f
         drawCircle(
-            color = Color(0xFF34C759).copy(alpha = (1f - pulse2.value) * 0.2f),
-            radius = maxRadius * pulse2.value,
+            color = Color(0xFF34C759).copy(alpha = (1f - delayedPulse) * 0.1f),
+            radius = maxRadius * delayedPulse,
             center = center,
             style = Stroke(width = 1.dp.toPx())
         )
 
-        // Draw center "Me" indicator
+        // Center indicator
         drawCircle(
             brush = androidx.compose.ui.graphics.Brush.radialGradient(
                 colors = listOf(Color(0xFF34C759), Color(0xFF22C55E).copy(alpha = 0f)),
                 center = center,
-                radius = 24.dp.toPx()
+                radius = 32.dp.toPx()
             ),
-            radius = 24.dp.toPx(),
+            radius = 32.dp.toPx(),
             center = center
         )
         drawCircle(
@@ -123,21 +160,23 @@ fun RadarView(
             center = center
         )
 
-        // Draw "Looking for devices" message if list is empty
+        // Draw Look message
         if (peers.isEmpty()) {
             paint.textSize = 30f
             paint.color = android.graphics.Color.GRAY
-            paint.alpha = (127 * (1f - pulse1.value)).toInt()
+            paint.alpha = (127 * (1f - pulseValue)).toInt()
             drawContext.canvas.nativeCanvas.drawText(
-                "Looking for artifacts...",
+                "Scanning proximity field...",
                 center.x,
                 center.y + maxRadius + 40.dp.toPx(),
                 paint
             )
         }
 
-        // Draw Peers as avatars
+        // Draw animated Peers
         peers.forEachIndexed { index, peer ->
+            val state = peerStates[peer.id] ?: return@forEachIndexed
+            
             val angle = (index * 137.5f) * (Math.PI / 180f)
             val normalizedRssi = (peer.rssi.coerceIn(-100, -30) + 100) / 70f
             val radius = maxRadius * (1f - normalizedRssi * 0.7f).coerceIn(0.25f, 0.95f)
@@ -145,51 +184,51 @@ fun RadarView(
             val x = center.x + radius * cos(angle).toFloat()
             val y = center.y + radius * sin(angle).toFloat()
 
-            // Avatar background
-            val avatarRadius = 24.dp.toPx()
+            // Apply entry animations
+            val s = state.scale.value
+            val a = state.alpha.value
             
-            // Proximity highlight
+            val avatarRadius = 24.dp.toPx() * s
+            
             if (peer.isProximityTriggered) {
                 drawCircle(
-                    color = Color(0xFF34C759).copy(alpha = 0.3f),
-                    radius = avatarRadius + 8.dp.toPx(),
+                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                        colors = listOf(Color(0xFF34C759).copy(alpha = 0.4f * a), Color.Transparent),
+                        center = Offset(x, y),
+                        radius = avatarRadius + 16.dp.toPx()
+                    ),
+                    radius = avatarRadius + 16.dp.toPx(),
                     center = Offset(x, y)
                 )
             }
 
             drawCircle(
-                color = Color.White.copy(alpha = 0.15f),
+                color = Color.White.copy(alpha = 0.1f * a),
                 radius = avatarRadius,
                 center = Offset(x, y)
             )
             
             drawCircle(
-                color = Color.White,
+                color = Color.White.copy(alpha = a),
                 radius = avatarRadius,
                 center = Offset(x, y),
                 style = Stroke(width = 1.dp.toPx())
             )
 
-            // Initial for avatar
-            val initial = peer.name.take(1).uppercase()
-            paint.textSize = 36f
-            paint.color = android.graphics.Color.WHITE
-            drawContext.canvas.nativeCanvas.drawText(
-                initial,
-                x,
-                y + 12f,
-                paint
-            )
-            
-            // Name below
-            paint.textSize = 24f
-            paint.color = android.graphics.Color.GRAY
-            drawContext.canvas.nativeCanvas.drawText(
-                peer.name,
-                x,
-                y + avatarRadius + 24f,
-                paint
-            )
+            // Initial
+            if (s > 0.5f) {
+                val initial = peer.name.take(1).uppercase()
+                paint.textSize = 36f * s
+                paint.color = android.graphics.Color.WHITE
+                paint.alpha = (255 * a).toInt()
+                drawContext.canvas.nativeCanvas.drawText(initial, x, y + 12f * s, paint)
+                
+                // Name
+                paint.textSize = 24f * s
+                paint.color = android.graphics.Color.GRAY
+                paint.alpha = (200 * a).toInt()
+                drawContext.canvas.nativeCanvas.drawText(peer.name, x, y + avatarRadius + 24f * s, paint)
+            }
         }
     }
 }
