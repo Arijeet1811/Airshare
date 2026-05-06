@@ -111,9 +111,6 @@ class AirShareService : Service() {
 
         // Initial notification
         updateNotification("AirShare is active - Looking for nearby devices...")
-        
-        // Make sure BLE starts properly
-        bleManager.startDiscovery()
     }
 
     fun setPendingFiles(files: List<Pair<Uri, String>>) {
@@ -126,9 +123,8 @@ class AirShareService : Service() {
 
     fun cancelTransfer() {
         _transferState.value = TransferState.Idle
-        // Cancel all running coroutines except the main serviceJob
-        // by cancelling the current transfer coroutine
-        // For now reset state — socket will timeout on its own
+        transferManager.stopReceiving()   // Close the ServerSocket immediately
+        startReceiving()                  // Reopen a fresh ServerSocket for next user
     }
 
     private var receivingJob: Job? = null
@@ -326,6 +322,7 @@ class AirShareService : Service() {
     }
 
     override fun onDestroy() {
+        stopForeground(true)
         isRunning = false
         cancelPeriodicBleRestart()
         bleManager.stopDiscovery()

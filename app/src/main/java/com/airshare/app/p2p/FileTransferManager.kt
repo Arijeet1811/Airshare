@@ -346,15 +346,17 @@ class FileTransferManager {
             }
 
             val buffer = ByteArray(BUFFER_SIZE)
+            val encryptedSize = fileSize + 16L  // fileSize + GCM tag
             var totalReceived = 0L
 
-            while (totalReceived < fileSize) {
-                val toRead = minOf(buffer.size.toLong(), fileSize - totalReceived).toInt()
+            while (totalReceived < encryptedSize) {
+                val toRead = minOf(buffer.size.toLong(), encryptedSize - totalReceived).toInt()
                 input.readFully(buffer, 0, toRead)
                 val decrypted = cipher.update(buffer, 0, toRead)
                 decrypted?.let { fileOut.write(it) }
                 totalReceived += toRead
-                onProgress(fileName, totalReceived, fileSize)
+                // Progress: show min of totalReceived and fileSize (don't show >100%)
+                onProgress(fileName, minOf(totalReceived, fileSize), fileSize)
             }
 
             val final = cipher.doFinal()

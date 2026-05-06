@@ -57,7 +57,6 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     
     // Animations & Networking
-    implementation(libs.lottie.compose)
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
