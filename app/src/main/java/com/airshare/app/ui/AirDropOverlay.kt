@@ -164,6 +164,114 @@ fun AirDropOverlay(
 }
 
 @Composable
+fun RoleSelectionOverlay(
+    peer: Peer?,
+    onSendFiles: () -> Unit,
+    onReceiveFiles: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AnimatedVisibility(
+        visible = peer != null,
+        enter = slideInVertically(
+            initialOffsetY = { -it - 200 },
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessLow
+            )
+        ) + fadeIn(animationSpec = tween(300)),
+        exit = slideOutVertically(
+            targetOffsetY = { -it - 200 },
+            animationSpec = tween(250, easing = EaseOutExpo)
+        ) + fadeOut(animationSpec = tween(200))
+    ) {
+        if (peer != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .statusBarsPadding(),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(0.95f),
+                    color = Color.White.copy(alpha = 0.08f),
+                    shape = RoundedCornerShape(32.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        brush = Brush.linearGradient(
+                            colors = listOf(Color.White.copy(alpha = 0.2f), Color.White.copy(alpha = 0.02f))
+                        )
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp).fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        OceanWaveAnimation()
+                        
+                        Spacer(modifier = Modifier.height(24.dp))
+                        
+                        Text(
+                            text = "Nearby Device Detected",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp
+                        )
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        Text(
+                            text = peer.name,
+                            color = Color.White.copy(alpha = 0.5f),
+                            fontSize = 14.sp
+                        )
+                        
+                        Spacer(modifier = Modifier.height(32.dp))
+                        
+                        Text(
+                            text = "Choose your role:",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 14.sp
+                        )
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Button(
+                                onClick = onSendFiles,
+                                modifier = Modifier.weight(1f).height(52.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Text("Send Files", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = onReceiveFiles,
+                                modifier = Modifier.weight(1f).height(52.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0096C7)),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Text("Receive Files", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        TextButton(onClick = onDismiss) {
+                            Text("Cancel", color = Color.White.copy(alpha = 0.4f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun OceanWaveAnimation() {
     val infiniteTransition = rememberInfiniteTransition(label = "OceanWave")
     

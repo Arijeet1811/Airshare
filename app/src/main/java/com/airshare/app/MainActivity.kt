@@ -188,21 +188,20 @@ class MainActivity : ComponentActivity() {
                 airShareService!!.transferState.collectAsState()
             } else remember { mutableStateOf(TransferState.Idle) }
 
-            val incomingPeer by if (isBound && airShareService != null) {
-                airShareService!!.incomingPeer.collectAsState()
+            val roleSelectionPeer by if (isBound && airShareService != null) {
+                airShareService!!.roleSelectionPeer.collectAsState()
             } else remember { mutableStateOf<Peer?>(null) }
 
             val incomingRequest = transferState as? TransferState.Request
             
-            // Clean logic for showing overlay
+            // Clean logic for showing overlay (AirDropOverlay is now ONLY for file requests/security)
             val showOverlayPeer = when {
-                incomingPeer != null -> incomingPeer
                 incomingRequest != null -> Peer(id = "incoming", name = "Nearby Device", rssi = 0)
                 manualSelectedPeer != null -> manualSelectedPeer
                 else -> null
             }
 
-            val isSenderMode = incomingPeer == null && incomingRequest == null && (manualSelectedPeer != null || isManualSenderMode)
+            val isSenderMode = incomingRequest == null && (manualSelectedPeer != null || isManualSenderMode)
 
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -303,25 +302,36 @@ class MainActivity : ComponentActivity() {
                         RadarView(
                             peers = peers,
                             onPeerTapped = { peer ->
+                                // Optional: You could still manually trigger role selection if needed
+                                // but typically proximity does it. Let's keep manual tap for direct connect.
                                 manualSelectedPeer = peer
                                 isManualSenderMode = true
-                                // If files selected, start connection
-                                if (selectedUris.isNotEmpty() && isBound && airShareService != null) {
-                                    airShareService?.connectToPeer(peer)
-                                    airShareService?.getBleManager()?.setConnectionRequestMode(true)
-                                    
-                                    // Auto-disable connection request after 30 seconds
-                                    coroutineScope.launch {
-                                        delay(30_000)
-                                        airShareService?.getBleManager()?.setConnectionRequestMode(false)
-                                    }
-                                } else {
+                                if (selectedUris.isEmpty()) {
                                     Toast.makeText(this@MainActivity, "Please select files first", Toast.LENGTH_SHORT).show()
                                     manualSelectedPeer = null
                                     isManualSenderMode = false
                                 }
                             }
                         )
+
+                        if (roleSelectionPeer != null) {
+                            com.airshare.app.ui.RoleSelectionOverlay(
+                                peer = roleSelectionPeer,
+                                onSendFiles = {
+                                    airShareService?.selectRole(1)   // sender role
+                                    filePickerLauncher.launch(arrayOf("*/*"))
+                                    airShareService?.clearRoleSelectionPeer()
+                                },
+                                onReceiveFiles = {
+                                    airShareService?.selectRole(2)   // receiver role
+                                    airShareService?.clearRoleSelectionPeer()
+                                    Toast.makeText(this@MainActivity, "Waiting for sender...", Toast.LENGTH_SHORT).show()
+                                },
+                                onDismiss = {
+                                    airShareService?.clearRoleSelectionPeer()
+                                }
+                            )
+                        }
 
                         // Bottom Controls
                         val bottomPadding = WindowInsets.systemBars.asPaddingValues().calculateBottomPadding()
@@ -390,9 +400,7 @@ class MainActivity : ComponentActivity() {
                             fileCount = incomingRequest?.fileCount ?: 1,
                             totalSizeBytes = incomingRequest?.fileSize ?: 0L,
                             onDismiss = {
-                                if (incomingPeer != null) {
-                                    airShareService?.clearIncomingPeer()
-                                } else if (incomingRequest != null) {
+                                if (incomingRequest != null) {
                                     incomingRequest.response.complete(false)
                                 } else {
                                     manualSelectedPeer = null
@@ -400,10 +408,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onAccept = { peer ->
-                                if (incomingPeer != null) {
-                                    airShareService?.acceptIncomingPeer()
-                                    airShareService?.clearIncomingPeer()
-                                } else if (incomingRequest != null) {
+                                if (incomingRequest != null) {
                                     incomingRequest.response.complete(true)
                                 } else {
                                     handleSendFiles()

@@ -46,8 +46,8 @@ class AirShareService : Service() {
     private val _transferState = MutableStateFlow<TransferState>(TransferState.Idle)
     val transferState: StateFlow<TransferState> = _transferState.asStateFlow()
 
-    private val _incomingPeer = MutableStateFlow<Peer?>(null)
-    val incomingPeer: StateFlow<Peer?> = _incomingPeer.asStateFlow()
+    private val _roleSelectionPeer = MutableStateFlow<Peer?>(null)
+    val roleSelectionPeer: StateFlow<Peer?> = _roleSelectionPeer.asStateFlow()
 
     private var lastConnectedHost: String? = null
 
@@ -95,11 +95,24 @@ class AirShareService : Service() {
         }
         wifiDirectManager.registerReceiver(this)
 
-        bleManager = BleManager(this) { peer ->
-            pendingConnectionRequest = peer
-            _incomingPeer.value = peer   // Show in-app overlay
-            showConnectionNotification(peer)  // Also show notification
-        }
+        bleManager = BleManager(
+            context = this,
+            onRoleSelectionNeeded = { peer ->
+                LogUtil.i("AirShareService", "Role selection needed with: ${peer.name}")
+                _roleSelectionPeer.value = peer
+            },
+            onRoleConflict = { peer ->
+                LogUtil.w("AirShareService", "Role conflict with: ${peer.name}")
+                bleManager.resetRole()
+                _roleSelectionPeer.value = null
+                _transferState.value = TransferState.Error("Same role selected! One must Send, one must Receive.")
+            },
+            onComplementaryRole = { senderPeer ->
+                LogUtil.i("AirShareService", "Complementary role detected, connecting to sender: ${senderPeer.name}")
+                _roleSelectionPeer.value = null
+                initiateConnectionToSender(senderPeer)
+            }
+        )
 
         // Auto-update notification based on state
         serviceScope.launch {
@@ -139,28 +152,32 @@ class AirShareService : Service() {
         }
     }
 
-    fun clearIncomingPeer() {
-        _incomingPeer.value = null
-        pendingConnectionRequest = null
-        bleManager.setConnectionRequestMode(false)
-        (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(CONNECTION_NOTIFICATION_ID)
+    fun clearRoleSelectionPeer() {
+        _roleSelectionPeer.value = null
     }
 
-    fun acceptIncomingPeer() {
-        val peer = pendingConnectionRequest ?: return
+    fun selectRole(role: Byte) {
+        bleManager.setRole(role)
+    }
+
+    private fun initiateConnectionToSender(senderPeer: Peer) {
         serviceScope.launch(Dispatchers.IO) {
             wifiDirectManager.initiateDiscovery()
             delay(2000)
-            val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
-            val matchedDevice = wifiDevices.find {
-                it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true)
-            } ?: wifiDevices.find { dev ->
-                peer.bleIdentifier.isNotEmpty() && dev.deviceAddress.replace(":", "").equals(peer.bleIdentifier.replace(":", ""), ignoreCase = true)
-            } ?: if (wifiDevices.size == 1) wifiDevices.first() else null
-            
+            val matchedDevice = wifiDirectManager.discoveredWifiDevices.value.find { dev ->
+                senderPeer.bleIdentifier.isNotEmpty() &&
+                dev.deviceAddress.replace(":", "")
+                    .equals(senderPeer.bleIdentifier.replace(":", ""), ignoreCase = true)
+            }
             matchedDevice?.let {
-                wifiDirectManager.connect(it)
-            } ?: LogUtil.w("AirShareService", "No WiFi device found for peer: ${peer.name}")
+                // Force receiver to be Group Owner
+                wifiDirectManager.connect(it, forceGroupOwner = true)
+            } ?: run {
+                LogUtil.w("AirShareService", "Could not find WiFi device for sender ${senderPeer.name}")
+                withContext(Dispatchers.Main) {
+                    _transferState.value = TransferState.Error("Could not connect to sender")
+                }
+            }
         }
     }
 
@@ -328,20 +345,20 @@ class AirShareService : Service() {
                 
                 matchedDevice?.let { 
                     LogUtil.i("AirShareService", "User accepted connection to ${it.deviceName}")
-                    wifiDirectManager.connect(it) 
+                    wifiDirectManager.connect(it, forceGroupOwner = true) 
                 } ?: run {
                     LogUtil.w("AirShareService", "Could not find wifi device for confirmed peer ${peer.name}")
                 }
             }
             pendingConnectionRequest = null
-            _incomingPeer.value = null
+            _roleSelectionPeer.value = null
             (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(CONNECTION_NOTIFICATION_ID)
             return START_STICKY
         }
         if (intent?.action == ACTION_DECLINE_CONNECTION) {
             pendingConnectionRequest = null
-            _incomingPeer.value = null
-            bleManager.setConnectionRequestMode(false)
+            _roleSelectionPeer.value = null
+            bleManager.resetRole()
             wifiDirectManager.cleanup() // Cancel any ongoing WiFi connection
             _transferState.value = TransferState.Idle
             (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(CONNECTION_NOTIFICATION_ID)

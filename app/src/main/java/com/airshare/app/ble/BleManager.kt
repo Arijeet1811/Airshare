@@ -27,7 +27,9 @@ import java.util.UUID
 @SuppressLint("MissingPermission")
 class BleManager(
     private val context: Context,
-    private val onProximityDetected: (Peer) -> Unit
+    private val onRoleSelectionNeeded: (Peer) -> Unit,
+    private val onRoleConflict: (Peer) -> Unit,
+    private val onComplementaryRole: (Peer) -> Unit
 ) {
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -36,17 +38,20 @@ class BleManager(
     private val _discoveredPeers = MutableStateFlow<List<Peer>>(emptyList())
     val discoveredPeers: StateFlow<List<Peer>> = _discoveredPeers.asStateFlow()
 
-    // ✅ FAST DISCOVERY: Unique UUID for AirShare
+    // ✅ SINGLE Service UUID - bass filtering ke liye kaafi hai
     private val SERVICE_UUID = UUID.fromString("f47ac10b-58cc-4372-a567-0e02b2c3d479")
-    private val CONNECTION_REQUEST_UUID = UUID.fromString("a1b2c3d4-e89b-12d3-a456-426614174000")
     private val PROXIMITY_THRESHOLD = -65  // Made stricter for faster trigger
 
     companion object {
         private const val AIRSHARE_MANUFACTURER_ID = 0x07CD
-        // ✅ OPTIMIZED: Much faster scanning
-        private const val SCAN_DURATION_MS = 3000L      // 3 seconds (was 10s)
-        private const val SCAN_INTERVAL_MS = 1000L      // 1 second gap (was 5s)
+        private const val SCAN_DURATION_MS = 3000L
+        private const val SCAN_INTERVAL_MS = 1000L
         private const val MAX_ADVERTISING_RETRIES = 3
+        
+        // Role constants
+        const val ROLE_UNDECIDED: Byte = 0
+        const val ROLE_SENDER: Byte = 1
+        const val ROLE_RECEIVER: Byte = 2
     }
 
     private val sessionId: String by lazy {
@@ -64,7 +69,7 @@ class BleManager(
     private var isDiscoveryActive = false
     private var isScanning = false
     private var isAdvertising = false
-    private var isConnectionRequesting = false
+    private var mySelectedRole: Byte = ROLE_UNDECIDED
     private var advertisingRetryCount = 0
     
     // ✅ NEW: For instant proximity detection
@@ -89,32 +94,45 @@ class BleManager(
     private val DUTY_CYCLE_INTERVAL = 30 * 1000L // 30 Seconds gap
     private val DUTY_CYCLE_SCAN_TIME = 5000L // 5 Seconds scan
 
+    /**
+     * ✅ OPTIMIZED SCAN CALLBACK
+     * Role extraction from manufacturer data - NO UUID check for role
+     */
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             if (isLowPowerMode) {
                 LogUtil.i("BleManager", "Peer found! Switching to Active Mode.")
-                isLowPowerMode = false // Wake up
+                isLowPowerMode = false
             }
 
             val device = result.device
-            val deviceName = result.scanRecord?.deviceName ?: device.name ?: device.address ?: "Unknown"
-            val rssi = result.rssi
+            val scanRecord = result.scanRecord ?: return
             
-            LogUtil.d("BleManager", "📡 Found: $deviceName, RSSI=$rssi")
+            // ✅ Quick filter: Check our service UUID first
+            val hasOurService = scanRecord.serviceUuids?.any { it.uuid == SERVICE_UUID } == true
+            if (!hasOurService) return
 
-            // Verify service UUID
-            val scanRecord = result.scanRecord
-            val hasOurService = scanRecord?.getServiceUuids()?.any { it.uuid == SERVICE_UUID } == true
-            if (!hasOurService && BuildConfig.DEBUG) {
-                LogUtil.d("BleManager", "  Not our service, ignoring")
-                return
+            val deviceName = scanRecord.deviceName 
+                ?: device.name 
+                ?: "Unknown"
+            val rssi = result.rssi
+
+            // ✅ Extract role from manufacturer data
+            var peerRole: Byte = ROLE_UNDECIDED
+            var bleIdentifier = device.address // fallback
+            
+            scanRecord.getManufacturerSpecificData(AIRSHARE_MANUFACTURER_ID)?.let { data ->
+                if (data.size >= 7) {
+                    // First 6 bytes = device identifier
+                    bleIdentifier = data.copyOfRange(0, 6).joinToString("") { "%02x".format(it) }
+                    // 7th byte = role
+                    peerRole = data[6]
+                } else if (data.size == 6) {
+                    bleIdentifier = data.copyOfRange(0, 6).joinToString("") { "%02x".format(it) }
+                    peerRole = ROLE_UNDECIDED
+                }
             }
 
-            val hasConnectionRequest = scanRecord?.getServiceUuids()?.any { it.uuid == CONNECTION_REQUEST_UUID } == true
-            val mfrData = scanRecord?.getManufacturerSpecificData(AIRSHARE_MANUFACTURER_ID)
-            val bleIdentifier = mfrData?.joinToString("") { "%02x".format(it) } ?: device.address
-
-            // ✅ INSTANT PROXIMITY DETECTION - No waiting!
             val smoothedRssi = getSmoothedRssi(device.address, rssi)
             val isClose = smoothedRssi > PROXIMITY_THRESHOLD
 
@@ -127,21 +145,50 @@ class BleManager(
                 bleIdentifier = bleIdentifier
             )
 
-            // ✅ Trigger immediately when close, with cooldown to avoid spam
-            // ONLY if the peer is actively requesting a connection
-            if (isClose && hasConnectionRequest && !recentlyTriggeredPeers.contains(device.address)) {
-                LogUtil.i("BleManager", "🎯 PROXIMITY INSTANT: ${peer.name} (RSSI=$rssi)")
-                recentlyTriggeredPeers.add(device.address)
-                onProximityDetected(peer)
+            updatePeers(peer)
+
+            // ✅ Role-based logic (only when close enough)
+            if (isClose && !recentlyTriggeredPeers.contains(device.address)) {
+                val myRole = mySelectedRole
                 
-                // Remove from cooldown after delay
-                managerScope.launch {
-                    delay(TRIGGER_COOLDOWN_MS)
-                    recentlyTriggeredPeers.remove(device.address)
+                when {
+                    // Both undecided → show role selection
+                    myRole == ROLE_UNDECIDED && peerRole == ROLE_UNDECIDED -> {
+                        LogUtil.i("BleManager", "🎯 Both undecided - showing role selection")
+                        recentlyTriggeredPeers.add(device.address)
+                        onRoleSelectionNeeded(peer)
+                        managerScope.launch {
+                            delay(TRIGGER_COOLDOWN_MS)
+                            recentlyTriggeredPeers.remove(device.address)
+                        }
+                    }
+                    // Same role chosen → conflict
+                    myRole != ROLE_UNDECIDED && peerRole == myRole -> {
+                        LogUtil.w("BleManager", "⚠️ Role conflict! Both are ${if(myRole == ROLE_SENDER) "SENDER" else "RECEIVER"}")
+                        recentlyTriggeredPeers.add(device.address)
+                        onRoleConflict(peer)
+                        managerScope.launch {
+                            delay(TRIGGER_COOLDOWN_MS)
+                            recentlyTriggeredPeers.remove(device.address)
+                        }
+                    }
+                    // I'm receiver, peer is sender → complementary!
+                    myRole == ROLE_RECEIVER && peerRole == ROLE_SENDER -> {
+                        LogUtil.i("BleManager", "🔗 Complementary roles detected! Starting connection...")
+                        recentlyTriggeredPeers.add(device.address)
+                        onComplementaryRole(peer)
+                        managerScope.launch {
+                            delay(TRIGGER_COOLDOWN_MS)
+                            recentlyTriggeredPeers.remove(device.address)
+                        }
+                    }
+                    // I'm sender, peer is receiver → sender just waits (no action needed)
+                    myRole == ROLE_SENDER && peerRole == ROLE_RECEIVER -> {
+                        LogUtil.d("BleManager", "👀 Sender detected receiver - waiting for connection")
+                        // Receiver will initiate WiFi Direct connection
+                    }
                 }
             }
-
-            updatePeers(peer)
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -159,7 +206,7 @@ class BleManager(
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            LogUtil.i("BleManager", "✅ Advertising started successfully")
+            LogUtil.i("BleManager", "✅ Advertising started (role=${mySelectedRole})")
             advertisingRetryCount = 0
         }
 
@@ -263,6 +310,20 @@ class BleManager(
         }
     }
 
+    /**
+     * ✅ OPTIMIZED ADVERTISING - Fits in 31 bytes
+     * 
+     * Advertisement Data (max 31 bytes):
+     *   - Flags: 3 bytes
+     *   - Service UUID (128-bit): 18 bytes
+     *   Total: ~21 bytes ✅
+     * 
+     * Scan Response (max 31 bytes):
+     *   - Device Name: variable (trimmed if needed)
+     *   - Manufacturer Data: 2 (ID) + 7 (data) = 9 bytes
+     *   Total: name_length + 9 bytes
+     *   If name > 22 chars, we truncate it
+     */
     private fun startAdvertising() {
         if (isAdvertising) return
         if (adapter?.bluetoothLeAdvertiser == null) {
@@ -270,44 +331,49 @@ class BleManager(
             return
         }
 
-        // 1. Configure High-Power, Low-Latency Settings for "Instant" feel
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
             .setTimeout(0)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH) // Maximum range/strength
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        // Process the Session ID into byte format
+        // ✅ Advertisement Data: ONLY Service UUID (well within 31 bytes)
+        val data = AdvertiseData.Builder()
+            .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .setIncludeTxPowerLevel(false)
+            .build()
+
+        // ✅ Scan Response: Device Name + Manufacturer Data (role encoded)
         val idBytes = sessionId.take(12).chunked(2).mapNotNull {
             it.toIntOrNull(16)?.toByte()
         }.toByteArray()
+        
+        // Manufacturer Data = 6 bytes device ID + 1 byte role = 7 bytes total
+        val mfrData = idBytes + byteArrayOf(mySelectedRole)
 
-        // 2. Primary Advertising Data: Must stay under 31 bytes
-        val dataBuilder = AdvertiseData.Builder()
-            .addServiceUuid(ParcelUuid(SERVICE_UUID)) // Essential for filtering
-            .setIncludeTxPowerLevel(false) // Save space
-            
-        if (isConnectionRequesting) {
-            dataBuilder.addServiceUuid(ParcelUuid(CONNECTION_REQUEST_UUID))
+        val scanResponseBuilder = AdvertiseData.Builder()
+            .addManufacturerData(AIRSHARE_MANUFACTURER_ID, mfrData)
+        
+        // ✅ Include device name but TRUNCATE if needed
+        val maxNameLength = 17
+        val deviceName = adapter?.name ?: "AirShare"
+        val truncatedName = if (deviceName.length > maxNameLength) {
+            deviceName.take(maxNameLength - 1) + "…"
+        } else {
+            deviceName
         }
-        val data = dataBuilder.build()
+        
+        if (truncatedName.length <= 20) {
+            scanResponseBuilder.setIncludeDeviceName(true)
+        } else {
+            LogUtil.w("BleManager", "Device name too long, using generic name in scan response")
+        }
 
-        // 3. Scan Response Data: Move heavy items here
-        val scanResponse = AdvertiseData.Builder()
-            .setIncludeDeviceName(true) // User-friendly name
-            .addManufacturerData(AIRSHARE_MANUFACTURER_ID, idBytes) // AirShare specific ID
-            .build()
+        val scanResponse = scanResponseBuilder.build()
 
-        // Start the broadcast
-        adapter?.bluetoothLeAdvertiser?.startAdvertising(
-            settings, 
-            data, 
-            scanResponse, 
-            advertiseCallback
-        )
+        adapter?.bluetoothLeAdvertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
         isAdvertising = true
-        LogUtil.d("BleManager", "Advertising started successfully with split payloads")
     }
 
     private fun startScanning() {
@@ -395,14 +461,21 @@ class BleManager(
         }
     }
 
-    fun isLowPowerMode(): Boolean = isLowPowerMode
-
-    fun setConnectionRequestMode(requesting: Boolean) {
-        if (isConnectionRequesting == requesting) return
-        isConnectionRequesting = requesting
+    fun setRole(role: Byte) {
+        mySelectedRole = role
+        LogUtil.i("BleManager", "Role set to $role")
+        // Restart advertising to include new role
         if (isAdvertising) {
             stopAdvertising()
             startAdvertising()
         }
     }
+
+    fun resetRole() {
+        setRole(ROLE_UNDECIDED)
+    }
+
+    fun getCurrentRole(): Byte = mySelectedRole
+
+    fun isLowPowerMode(): Boolean = isLowPowerMode
 }
