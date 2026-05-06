@@ -2,11 +2,13 @@ package com.airshare.app.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.animation.core.EaseOutExpo
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Share
@@ -15,12 +17,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.airshare.app.model.Peer
+import kotlin.math.sin
 
 @Composable
 fun AirDropOverlay(
@@ -33,8 +38,17 @@ fun AirDropOverlay(
 ) {
     AnimatedVisibility(
         visible = peer != null,
-        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+        enter = slideInVertically(
+            initialOffsetY = { -it - 200 },
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessLow
+            )
+        ) + fadeIn(animationSpec = tween(300)),
+        exit = slideOutVertically(
+            targetOffsetY = { -it - 200 },
+            animationSpec = tween(250, easing = EaseOutExpo)
+        ) + fadeOut(animationSpec = tween(200))
     ) {
         if (peer != null) {
             Box(
@@ -59,10 +73,11 @@ fun AirDropOverlay(
                     Column(
                         modifier = Modifier
                             .padding(24.dp)
-                            .fillMaxWidth(),
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        SeaWaveAnimation()
+                        OceanWaveAnimation()
 
                         Spacer(modifier = Modifier.height(24.dp))
 
@@ -110,35 +125,34 @@ fun AirDropOverlay(
                             }
                         } else {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Button(
                                     onClick = onDismiss,
-                                    modifier = Modifier.weight(0.4f),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(52.dp),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color.White.copy(alpha = 0.05f)
+                                        containerColor = Color.White.copy(alpha = 0.12f)
                                     ),
-                                    shape = RoundedCornerShape(20.dp),
-                                    contentPadding = PaddingValues(vertical = 12.dp)
+                                    shape = RoundedCornerShape(16.dp)
                                 ) {
-                                    Text("Decline", color = Color.White.copy(alpha = 0.7f))
+                                    Text("Decline", color = Color.White, fontWeight = FontWeight.SemiBold)
                                 }
-
                                 Button(
                                     onClick = { onAccept(peer) },
-                                    modifier = Modifier.weight(0.6f),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(52.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = Color(0xFF34C759)
                                     ),
-                                    shape = RoundedCornerShape(20.dp),
-                                    contentPadding = PaddingValues(vertical = 12.dp)
+                                    shape = RoundedCornerShape(16.dp)
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("Accept", color = Color.White, fontWeight = FontWeight.Bold)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Icon(Icons.Default.ArrowForward, null, modifier = Modifier.size(16.dp))
-                                    }
+                                    Text("Accept", color = Color.White, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -150,66 +164,100 @@ fun AirDropOverlay(
 }
 
 @Composable
-fun SeaWaveAnimation() {
-    val infiniteTransition = rememberInfiniteTransition(label = "SeaWave")
+fun OceanWaveAnimation() {
+    val infiniteTransition = rememberInfiniteTransition(label = "OceanWave")
     
-    Box(
+    // Wave phase animation — drives the sine wave movement
+    val wavePhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ), label = "WavePhase"
+    )
+    
+    // Second wave at different speed for depth effect
+    val wavePhase2 by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(2800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ), label = "WavePhase2"
+    )
+    
+    // Foam alpha — the white crest of the wave
+    val foamAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "FoamAlpha"
+    )
+
+    Canvas(
         modifier = Modifier
-            .size(100.dp),
-        contentAlignment = Alignment.Center
+            .fillMaxWidth()
+            .height(80.dp)
+            .clip(RoundedCornerShape(16.dp))
     ) {
-        repeat(3) { index ->
-            val scale by infiniteTransition.animateFloat(
-                initialValue = 0.3f,
-                targetValue = 1.0f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(2500, delayMillis = index * 800, easing = EaseOutQuart),
-                    repeatMode = RepeatMode.Restart
-                ), label = "WaveScale"
+        val width = size.width
+        val height = size.height
+        val midY = height * 0.55f
+        val amplitude = height * 0.18f
+        val amplitude2 = height * 0.12f
+
+        // Draw ocean background gradient
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFF0077B6),
+                    Color(0xFF023E8A)
+                )
             )
-            val alpha by infiniteTransition.animateFloat(
-                initialValue = 0.4f,
-                targetValue = 0.0f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(2500, delayMillis = index * 800, easing = EaseOutQuart),
-                    repeatMode = RepeatMode.Restart
-                ), label = "WaveAlpha"
-            )
-            Box(
-                modifier = Modifier
-                    .size(100.dp * scale)
-                    .background(
-                        brush = Brush.radialGradient(
-                            colors = listOf(Color(0xFF34C759).copy(alpha = alpha), Color.Transparent)
-                        ),
-                        shape = RoundedCornerShape(50.dp)
-                    )
-                    .border(
-                        width = (0.5.dp / scale).coerceAtLeast(0.1.dp),
-                        color = Color(0xFF34C759).copy(alpha = alpha * 0.5f),
-                        shape = RoundedCornerShape(50.dp)
-                    )
-            )
+        )
+
+        // Draw first wave (back layer — darker blue)
+        val path1 = Path()
+        path1.moveTo(0f, height)
+        for (x in 0..width.toInt() step 2) {
+            val y = midY + amplitude * sin(wavePhase + x * 0.015f).toFloat()
+            path1.lineTo(x.toFloat(), y)
         }
-        
-        // Center icon with glow
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .background(
-                    brush = Brush.radialGradient(
-                        colors = listOf(Color(0xFF34C759), Color(0xFF16A34A))
-                    ),
-                    shape = RoundedCornerShape(24.dp)
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Share,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(24.dp)
-            )
+        path1.lineTo(width, height)
+        path1.close()
+        drawPath(
+            path = path1,
+            color = Color(0xFF0096C7).copy(alpha = 0.8f)
+        )
+
+        // Draw second wave (front layer — lighter blue)
+        val path2 = Path()
+        path2.moveTo(0f, height)
+        for (x in 0..width.toInt() step 2) {
+            val y = midY + amplitude2 * sin(wavePhase2 + x * 0.02f + 1f).toFloat() + amplitude * 0.3f
+            path2.lineTo(x.toFloat(), y)
+        }
+        path2.lineTo(width, height)
+        path2.close()
+        drawPath(
+            path = path2,
+            color = Color(0xFF48CAE4).copy(alpha = 0.6f)
+        )
+
+        // Draw foam (white crests)
+        for (x in 0..width.toInt() step 4) {
+            val y = midY + amplitude * sin(wavePhase + x * 0.015f).toFloat()
+            // Small white dots/dashes at wave peaks
+            if (sin(wavePhase + x * 0.015f).toFloat() < -0.5f) {
+                drawCircle(
+                    color = Color.White.copy(alpha = foamAlpha),
+                    radius = 3f,
+                    center = Offset(x.toFloat(), y - 4f)
+                )
+            }
         }
     }
 }

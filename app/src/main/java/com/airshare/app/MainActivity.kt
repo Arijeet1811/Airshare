@@ -178,18 +178,21 @@ class MainActivity : ComponentActivity() {
                 airShareService!!.transferState.collectAsState()
             } else remember { mutableStateOf(TransferState.Idle) }
 
-            val incomingRequest = transferState as? TransferState.Request
-            val triggeredPeer = peers.find { it.isProximityTriggered }
+            val incomingPeer by if (isBound && airShareService != null) {
+                airShareService!!.incomingPeer.collectAsState()
+            } else remember { mutableStateOf<Peer?>(null) }
 
+            val incomingRequest = transferState as? TransferState.Request
+            
             // Clean logic for showing overlay
             val showOverlayPeer = when {
+                incomingPeer != null -> incomingPeer
                 incomingRequest != null -> Peer(id = "incoming", name = "Nearby Device", rssi = 0)
                 manualSelectedPeer != null -> manualSelectedPeer
-                triggeredPeer != null -> triggeredPeer
                 else -> null
             }
 
-            val isSenderMode = incomingRequest == null && (manualSelectedPeer != null || isManualSenderMode)
+            val isSenderMode = incomingPeer == null && incomingRequest == null && (manualSelectedPeer != null || isManualSenderMode)
 
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -350,27 +353,29 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // Overlay
                         AirDropOverlay(
                             peer = showOverlayPeer,
                             isSender = isSenderMode,
                             fileCount = incomingRequest?.fileCount ?: 1,
                             totalSizeBytes = incomingRequest?.fileSize ?: 0L,
                             onDismiss = {
-                                if (incomingRequest != null) {
+                                if (incomingPeer != null) {
+                                    airShareService?.clearIncomingPeer()
+                                } else if (incomingRequest != null) {
                                     incomingRequest.response.complete(false)
                                 } else {
-                                    // Manual sender mode dismiss
                                     manualSelectedPeer = null
                                     isManualSenderMode = false
                                 }
                             },
                             onAccept = { peer ->
-                                if (incomingRequest != null) {
+                                if (incomingPeer != null) {
+                                    airShareService?.acceptIncomingPeer()
+                                    airShareService?.clearIncomingPeer()
+                                } else if (incomingRequest != null) {
                                     incomingRequest.response.complete(true)
                                 } else {
                                     handleSendFiles()
-                                    // Reset manual mode after starting send
                                     manualSelectedPeer = null
                                     isManualSenderMode = false
                                 }

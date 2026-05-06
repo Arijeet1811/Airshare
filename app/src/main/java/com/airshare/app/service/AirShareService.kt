@@ -46,6 +46,11 @@ class AirShareService : Service() {
     private val _transferState = MutableStateFlow<TransferState>(TransferState.Idle)
     val transferState: StateFlow<TransferState> = _transferState.asStateFlow()
 
+    private val _incomingPeer = MutableStateFlow<Peer?>(null)
+    val incomingPeer: StateFlow<Peer?> = _incomingPeer.asStateFlow()
+
+    private var lastConnectedHost: String? = null
+
     private val serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
 
@@ -77,19 +82,23 @@ class AirShareService : Service() {
         createNotificationChannel()
         wifiDirectManager = WifiDirectManager(this) { info ->
             if (info.groupFormed && !info.isGroupOwner) {
-                val targetHost = info.groupOwnerAddress.hostAddress
+                val targetHost = info.groupOwnerAddress?.hostAddress ?: return@WifiDirectManager
                 if (pendingFiles.isNotEmpty()) {
-                    sendFiles(targetHost, pendingFiles)
-                    pendingFiles = emptyList() // Clear after sending
+                    val filesToSend = pendingFiles.toList()
+                    pendingFiles = emptyList()
+                    sendFiles(targetHost, filesToSend)
+                } else {
+                    // Store host so we can send when files are selected later
+                    lastConnectedHost = targetHost
                 }
             }
         }
         wifiDirectManager.registerReceiver(this)
 
         bleManager = BleManager(this) { peer ->
-            // Don't auto-connect - just show notification for approval
             pendingConnectionRequest = peer
-            showConnectionNotification(peer)
+            _incomingPeer.value = peer   // Show in-app overlay
+            showConnectionNotification(peer)  // Also show notification
         }
 
         // Auto-update notification based on state
@@ -115,16 +124,47 @@ class AirShareService : Service() {
 
     fun setPendingFiles(files: List<Pair<Uri, String>>) {
         pendingFiles = files
+        trySendNowIfConnected()
     }
 
     fun trySendNowIfConnected() {
-        wifiDirectManager.requestConnectionInfo()
+        val host = lastConnectedHost
+        if (host != null && pendingFiles.isNotEmpty()) {
+            val filesToSend = pendingFiles.toList()
+            pendingFiles = emptyList()
+            lastConnectedHost = null
+            sendFiles(host, filesToSend)
+        } else {
+            wifiDirectManager.requestConnectionInfo()
+        }
+    }
+
+    fun clearIncomingPeer() {
+        _incomingPeer.value = null
+    }
+
+    fun acceptIncomingPeer() {
+        val peer = pendingConnectionRequest ?: return
+        serviceScope.launch(Dispatchers.IO) {
+            wifiDirectManager.initiateDiscovery()
+            delay(2000)
+            val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
+            val matchedDevice = wifiDevices.find {
+                it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true)
+            } ?: if (wifiDevices.size == 1) wifiDevices.first() else null
+            matchedDevice?.let {
+                wifiDirectManager.connect(it)
+            } ?: LogUtil.w("AirShareService", "No WiFi device found for peer: ${peer.name}")
+        }
     }
 
     fun cancelTransfer() {
         _transferState.value = TransferState.Idle
         transferManager.stopReceiving()   // Close the ServerSocket immediately
-        startReceiving()                  // Reopen a fresh ServerSocket for next user
+        serviceScope.launch {
+            delay(500)  // Wait for old socket to fully close
+            startReceiving()                  // Reopen a fresh ServerSocket for next user
+        }
     }
 
     private var receivingJob: Job? = null
@@ -265,11 +305,13 @@ class AirShareService : Service() {
                 }
             }
             pendingConnectionRequest = null
+            _incomingPeer.value = null
             (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(CONNECTION_NOTIFICATION_ID)
             return START_STICKY
         }
         if (intent?.action == ACTION_DECLINE_CONNECTION) {
             pendingConnectionRequest = null
+            _incomingPeer.value = null
             (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(CONNECTION_NOTIFICATION_ID)
             return START_STICKY
         }
@@ -282,33 +324,51 @@ class AirShareService : Service() {
     }
 
     private fun showConnectionNotification(peer: Peer) {
+        // Intent to open MainActivity (shows the in-app overlay)
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("peer_name", peer.name)
+            putExtra("peer_id", peer.id)
+            putExtra("show_overlay", true)
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            this, 0, openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val acceptIntent = Intent(this, AirShareService::class.java).apply {
             action = ACTION_ACCEPT_CONNECTION
             putExtra("peer_name", peer.name)
             putExtra("peer_id", peer.id)
         }
         val acceptPendingIntent = PendingIntent.getService(
-            this, 0, acceptIntent, 
+            this, 1, acceptIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         val declineIntent = Intent(this, AirShareService::class.java).apply {
             action = ACTION_DECLINE_CONNECTION
+            putExtra("peer_id", peer.id)
         }
         val declinePendingIntent = PendingIntent.getService(
-            this, 0, declineIntent,
+            this, 2, declineIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("${peer.name} near you")
-            .setContentText("Tap to connect and share files")
+
+        // Use HIGH_PRIORITY channel for heads-up notification
+        val notification = NotificationCompat.Builder(this, CONNECTION_CHANNEL_ID)
+            .setContentTitle("${peer.name} wants to connect")
+            .setContentText("Tap to open AirShare and accept or decline")
             .setSmallIcon(android.R.drawable.ic_menu_share)
+            .setContentIntent(openAppPendingIntent)
+            .setFullScreenIntent(openAppPendingIntent, true)  // Show as heads-up / full-screen
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
-            .addAction(android.R.drawable.ic_menu_save, "Connect", acceptPendingIntent)
+            .addAction(android.R.drawable.ic_menu_save, "Open & Accept", acceptPendingIntent)
             .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
             .build()
-        
+
         val manager = getSystemService(NotificationManager::class.java)
         manager?.notify(CONNECTION_NOTIFICATION_ID, notification)
     }
@@ -386,14 +446,26 @@ class AirShareService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            
             val serviceChannel = NotificationChannel(
                 CHANNEL_ID,
                 "AirShare Service Channel",
                 NotificationManager.IMPORTANCE_HIGH // High importance for visibility
             )
             serviceChannel.description = "Required for AirShare background features"
-            val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(serviceChannel)
+
+            val connectionChannel = NotificationChannel(
+                CONNECTION_CHANNEL_ID,
+                "AirShare Connection Requests",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Shows when a nearby device wants to connect"
+                enableVibration(true)
+                setShowBadge(true)
+            }
+            manager?.createNotificationChannel(connectionChannel)
         }
     }
 
@@ -437,6 +509,7 @@ class AirShareService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "AirShareServiceChannel"
+        private const val CONNECTION_CHANNEL_ID = "AirShareConnectionChannel"
         private const val NOTIFICATION_ID = 1
         private const val CONNECTION_NOTIFICATION_ID = 2
         const val ACTION_STOP = "com.airshare.app.service.STOP"
