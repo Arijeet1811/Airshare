@@ -335,7 +335,7 @@ class MainActivity : ComponentActivity() {
                                         Surface(
                                             modifier = Modifier.padding(top = 12.dp),
                                             color = Color(0xFF34C759).copy(alpha = 0.1f),
-                                            shape = RoundedCornerShape(full = true)
+                                            shape = RoundedCornerShape(50)
                                         ) {
                                             Text(
                                                 text = "${selectedUris.size} Artifacts Prepared",
@@ -517,6 +517,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BatteryDataSaverPrompt() {
         val context = LocalContext.current
+        
         val isOptimized = remember {
             val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             !pm.isIgnoringBatteryOptimizations(context.packageName)
@@ -524,9 +525,13 @@ class MainActivity : ComponentActivity() {
         
         val isDataRestricted = remember {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                cm.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
-            } else false
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) 
+                    as ConnectivityManager
+                cm.restrictBackgroundStatus == 
+                    ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+            } else {
+                false
+            }
         }
 
         if (isOptimized || isDataRestricted) {
@@ -548,9 +553,11 @@ class MainActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isOptimized && isDataRestricted) "⚠️ Throttled: Tap to fix"
-                              else if (isOptimized) "🔋 Battery Optimized: Tap to fix"
-                              else "📶 Data Restricted: Tap to fix",
+                        text = when {
+                            isOptimized && isDataRestricted -> "⚠️ Throttled: Tap to fix"
+                            isOptimized -> "🔋 Battery Optimized: Tap to fix"
+                            else -> "📶 Data Restricted: Tap to fix"
+                        },
                         color = Color.Yellow,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
