@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.p2p.*
+import android.os.Build
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -100,29 +102,51 @@ class WifiDirectManager(
         }
     }
 
-    fun connect(device: WifiP2pDevice) {
-        Log.i("WifiDirect", "Connecting to: ${device.deviceName} (${device.deviceAddress})")
+    /**
+     * ✅ UPDATED: Now accepts optional forceGroupOwner parameter
+     */
+    fun connect(device: WifiP2pDevice, forceGroupOwner: Boolean = false) {
+        Log.i("WifiDirect", "Connecting to: ${device.deviceName} (${device.deviceAddress}), forceGroupOwner=$forceGroupOwner")
 
         manager?.cancelConnect(channel, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() { performConnect(device) }
-            override fun onFailure(reason: Int) { performConnect(device) } // No pending connect is also fine
+            override fun onSuccess() { performConnect(device, forceGroupOwner) }
+            override fun onFailure(reason: Int) { performConnect(device, forceGroupOwner) } // No pending connect is also fine
         })
     }
 
-    private fun performConnect(device: WifiP2pDevice) {
-        val myId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: ""
-        // Tie-breaker: If my ID hash is higher, I intend to be the group owner.
-        // This avoids both devices trying to be clients or both trying to be owners.
-        val intentValue = if (myId.hashCode() > device.deviceAddress.hashCode()) 15 else 0
+    /**
+     * ✅ UPDATED: forceGroupOwner parameter se group owner intent control hota hai
+     */
+    private fun performConnect(device: WifiP2pDevice, forceGroupOwner: Boolean = false) {
+        val myId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+        
+        // If forceGroupOwner is true, this device will ALWAYS be Group Owner (intent = 15)
+        // Otherwise, use tie-breaker logic based on device IDs
+        val intentValue = if (forceGroupOwner) {
+            15  // Always be Group Owner
+        } else {
+            if (myId.hashCode() > device.deviceAddress.hashCode()) 15 else 0
+        }
 
-        val config = WifiP2pConfig().apply {
-            deviceAddress = device.deviceAddress
-            groupOwnerIntent = intentValue
+        Log.d("WifiDirect", "Group Owner Intent: $intentValue (forceGroupOwner=$forceGroupOwner)")
+
+        val config = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WifiP2pConfig.Builder()
+                .setDeviceAddress(device.deviceAddress)
+                .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_AUTO)
+                .build().apply {
+                    groupOwnerIntent = intentValue
+                }
+        } else {
+            WifiP2pConfig().apply {
+                deviceAddress = device.deviceAddress
+                groupOwnerIntent = intentValue
+            }
         }
 
         manager?.connect(channel, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
-                Log.i("WifiDirect", "Connect request queued successfully")
+                Log.i("WifiDirect", "Connect request queued successfully (forceGroupOwner=$forceGroupOwner)")
             }
             override fun onFailure(reason: Int) {
                 Log.e("WifiDirect", "Connect failed with reason: $reason")
