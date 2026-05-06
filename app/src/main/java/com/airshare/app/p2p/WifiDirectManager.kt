@@ -64,17 +64,17 @@ class WifiDirectManager(
                     requestPeers()
                 }
                 WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
-                    val p2pInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    val p2pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_INFO, WifiP2pInfo::class.java)
                     } else {
                         @Suppress("DEPRECATION")
-                        intent.getParcelableExtra<WifiP2pInfo>(WifiP2pManager.EXTRA_WIFI_P2P_INFO)
+                        intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_INFO) as? WifiP2pInfo
                     }
 
                     Log.d("WifiDirect", "Connection changed → groupFormed=${p2pInfo?.groupFormed}, isOwner=${p2pInfo?.isGroupOwner}")
 
                     if (p2pInfo?.groupFormed == true) {
-                        requestConnectionInfo()  // Try immediately
+                        requestConnectionInfo()
                     }
                 }
             }
@@ -103,46 +103,40 @@ class WifiDirectManager(
     }
 
     /**
-     * ✅ UPDATED: Now accepts optional forceGroupOwner parameter
+     * Connect to a WiFi Direct device
+     * @param forceGroupOwner If true, this device will always become Group Owner
      */
     fun connect(device: WifiP2pDevice, forceGroupOwner: Boolean = false) {
         Log.i("WifiDirect", "Connecting to: ${device.deviceName} (${device.deviceAddress}), forceGroupOwner=$forceGroupOwner")
 
         manager?.cancelConnect(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() { performConnect(device, forceGroupOwner) }
-            override fun onFailure(reason: Int) { performConnect(device, forceGroupOwner) } // No pending connect is also fine
+            override fun onFailure(reason: Int) { performConnect(device, forceGroupOwner) }
         })
     }
 
     /**
-     * ✅ UPDATED: forceGroupOwner parameter se group owner intent control hota hai
+     * Create WifiP2pConfig with proper device address handling for all API levels
      */
     private fun performConnect(device: WifiP2pDevice, forceGroupOwner: Boolean = false) {
         val myId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
         
         // If forceGroupOwner is true, this device will ALWAYS be Group Owner (intent = 15)
-        // Otherwise, use tie-breaker logic based on device IDs
         val intentValue = if (forceGroupOwner) {
-            15  // Always be Group Owner
+            15
         } else {
             if (myId.hashCode() > device.deviceAddress.hashCode()) 15 else 0
         }
 
         Log.d("WifiDirect", "Group Owner Intent: $intentValue (forceGroupOwner=$forceGroupOwner)")
 
-        val config = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            WifiP2pConfig.Builder()
-                .setDeviceAddress(device.deviceAddress)
-                .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_AUTO)
-                .build().apply {
-                    groupOwnerIntent = intentValue
-                }
-        } else {
-            WifiP2pConfig().apply {
-                deviceAddress = device.deviceAddress
-                groupOwnerIntent = intentValue
-            }
-        }
+        val config = WifiP2pConfig()
+
+        // Handle API version differences for setDeviceAddress
+        config.deviceAddress = device.deviceAddress
+        
+        // Set group owner intent using property
+        config.groupOwnerIntent = intentValue
 
         manager?.connect(channel, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
