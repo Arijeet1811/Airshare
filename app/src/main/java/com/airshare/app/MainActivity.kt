@@ -516,56 +516,46 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun BatteryDataSaverPrompt() {
-        val context = LocalContext.current
-        
-        val isOptimized = remember {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-            !pm.isIgnoringBatteryOptimizations(context.packageName)
-        }
-        
-        val isDataRestricted = remember {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) 
-                    as ConnectivityManager
-                cm.restrictBackgroundStatus == 
-                    ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
-            } else {
-                false
-            }
-        }
+    val context = LocalContext.current
+    val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    val isOptimized = remember { !pm.isIgnoringBatteryOptimizations(context.packageName) }
+    val isDataRestricted = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+        } else false
+    }
 
-        if (isOptimized || isDataRestricted) {
-            Surface(
-                color = Color.Yellow.copy(alpha = 0.1f),
-                shape = RoundedCornerShape(12.dp),
-                onClick = {
-                    try {
-                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                        context.startActivity(intent)
-                    } catch (e: Exception) {
-                        val intent = Intent(Settings.ACTION_SETTINGS)
-                        context.startActivity(intent)
-                    }
+    if (isOptimized || isDataRestricted) {
+        Surface(
+            color = Color.Yellow.copy(alpha = 0.1f),
+            shape = RoundedCornerShape(12.dp),
+            onClick = {
+                try {
+                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                } catch (e: Exception) {
+                    context.startActivity(Intent(Settings.ACTION_SETTINGS))
                 }
+            }
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = when {
-                            isOptimized && isDataRestricted -> "⚠️ Throttled: Tap to fix"
-                            isOptimized -> "🔋 Battery Optimized: Tap to fix"
-                            else -> "📶 Data Restricted: Tap to fix"
-                        },
-                        color = Color.Yellow,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                Text(
+                    text = when {
+                        isOptimized && isDataRestricted -> "⚠️ Throttled: Tap to fix"
+                        isOptimized -> "🔋 Battery Optimized: Tap to fix"
+                        else -> "📶 Data Restricted: Tap to fix"
+                    },
+                    color = Color.Yellow,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
+}
 
     override fun onResume() {
         super.onResume()
