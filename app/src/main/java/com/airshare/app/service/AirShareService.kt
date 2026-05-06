@@ -141,6 +141,9 @@ class AirShareService : Service() {
 
     fun clearIncomingPeer() {
         _incomingPeer.value = null
+        pendingConnectionRequest = null
+        bleManager.setConnectionRequestMode(false)
+        (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(CONNECTION_NOTIFICATION_ID)
     }
 
     fun acceptIncomingPeer() {
@@ -151,10 +154,36 @@ class AirShareService : Service() {
             val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
             val matchedDevice = wifiDevices.find {
                 it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true)
+            } ?: wifiDevices.find { dev ->
+                peer.bleIdentifier.isNotEmpty() && dev.deviceAddress.replace(":", "").equals(peer.bleIdentifier.replace(":", ""), ignoreCase = true)
             } ?: if (wifiDevices.size == 1) wifiDevices.first() else null
+            
             matchedDevice?.let {
                 wifiDirectManager.connect(it)
             } ?: LogUtil.w("AirShareService", "No WiFi device found for peer: ${peer.name}")
+        }
+    }
+
+    fun connectToPeer(peer: Peer) {
+        serviceScope.launch(Dispatchers.IO) {
+            lastConnectedHost = null
+            wifiDirectManager.initiateDiscovery()
+            delay(2000)  // wait for devices
+
+            val matchedDevice = wifiDirectManager.discoveredWifiDevices.value.find { dev ->
+                dev.deviceName.trim().equals(peer.name.trim(), ignoreCase = true) ||
+                (peer.bleIdentifier.isNotEmpty() && dev.deviceAddress.replace(":", "")
+                    .equals(peer.bleIdentifier.replace(":", ""), ignoreCase = true))
+            }
+            matchedDevice?.let {
+                LogUtil.i("AirShareService", "Initiating WiFi Direct to ${it.deviceName}")
+                wifiDirectManager.connect(it)
+            } ?: run {
+                LogUtil.w("AirShareService", "No WiFi device matched for peer ${peer.name}")
+                withContext(Dispatchers.Main) {
+                    _transferState.value = TransferState.Error("Could not find peer on WiFi")
+                }
+            }
         }
     }
 
@@ -312,6 +341,9 @@ class AirShareService : Service() {
         if (intent?.action == ACTION_DECLINE_CONNECTION) {
             pendingConnectionRequest = null
             _incomingPeer.value = null
+            bleManager.setConnectionRequestMode(false)
+            wifiDirectManager.cleanup() // Cancel any ongoing WiFi connection
+            _transferState.value = TransferState.Idle
             (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(CONNECTION_NOTIFICATION_ID)
             return START_STICKY
         }
@@ -320,6 +352,7 @@ class AirShareService : Service() {
         bleManager.startDiscovery()
         startReceiving()
         schedulePeriodicBleRestart()
+        wifiDirectManager.initiateDiscovery()
         return START_STICKY
     }
 
@@ -374,6 +407,8 @@ class AirShareService : Service() {
     }
 
     fun getDiscoveredPeers(): StateFlow<List<Peer>> = bleManager.discoveredPeers
+
+    fun getBleManager(): BleManager = bleManager
 
     fun isLowPowerMode(): Boolean = bleManager.isLowPowerMode()
 

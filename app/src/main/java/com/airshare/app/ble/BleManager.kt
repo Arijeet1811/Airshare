@@ -38,6 +38,7 @@ class BleManager(
 
     // ✅ FAST DISCOVERY: Unique UUID for AirShare
     private val SERVICE_UUID = UUID.fromString("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+    private val CONNECTION_REQUEST_UUID = UUID.fromString("a1b2c3d4-e89b-12d3-a456-426614174000")
     private val PROXIMITY_THRESHOLD = -65  // Made stricter for faster trigger
 
     companion object {
@@ -63,6 +64,7 @@ class BleManager(
     private var isDiscoveryActive = false
     private var isScanning = false
     private var isAdvertising = false
+    private var isConnectionRequesting = false
     private var advertisingRetryCount = 0
     
     // ✅ NEW: For instant proximity detection
@@ -101,13 +103,15 @@ class BleManager(
             LogUtil.d("BleManager", "📡 Found: $deviceName, RSSI=$rssi")
 
             // Verify service UUID
-            val hasOurService = result.scanRecord?.getServiceUuids()?.any { it.uuid == SERVICE_UUID } == true
+            val scanRecord = result.scanRecord
+            val hasOurService = scanRecord?.getServiceUuids()?.any { it.uuid == SERVICE_UUID } == true
             if (!hasOurService && BuildConfig.DEBUG) {
                 LogUtil.d("BleManager", "  Not our service, ignoring")
                 return
             }
 
-            val mfrData = result.scanRecord?.getManufacturerSpecificData(AIRSHARE_MANUFACTURER_ID)
+            val hasConnectionRequest = scanRecord?.getServiceUuids()?.any { it.uuid == CONNECTION_REQUEST_UUID } == true
+            val mfrData = scanRecord?.getManufacturerSpecificData(AIRSHARE_MANUFACTURER_ID)
             val bleIdentifier = mfrData?.joinToString("") { "%02x".format(it) } ?: device.address
 
             // ✅ INSTANT PROXIMITY DETECTION - No waiting!
@@ -124,7 +128,8 @@ class BleManager(
             )
 
             // ✅ Trigger immediately when close, with cooldown to avoid spam
-            if (isClose && !recentlyTriggeredPeers.contains(device.address)) {
+            // ONLY if the peer is actively requesting a connection
+            if (isClose && hasConnectionRequest && !recentlyTriggeredPeers.contains(device.address)) {
                 LogUtil.i("BleManager", "🎯 PROXIMITY INSTANT: ${peer.name} (RSSI=$rssi)")
                 recentlyTriggeredPeers.add(device.address)
                 onProximityDetected(peer)
@@ -279,10 +284,14 @@ class BleManager(
         }.toByteArray()
 
         // 2. Primary Advertising Data: Must stay under 31 bytes
-        val data = AdvertiseData.Builder()
+        val dataBuilder = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(SERVICE_UUID)) // Essential for filtering
             .setIncludeTxPowerLevel(false) // Save space
-            .build()
+            
+        if (isConnectionRequesting) {
+            dataBuilder.addServiceUuid(ParcelUuid(CONNECTION_REQUEST_UUID))
+        }
+        val data = dataBuilder.build()
 
         // 3. Scan Response Data: Move heavy items here
         val scanResponse = AdvertiseData.Builder()
@@ -387,4 +396,13 @@ class BleManager(
     }
 
     fun isLowPowerMode(): Boolean = isLowPowerMode
+
+    fun setConnectionRequestMode(requesting: Boolean) {
+        if (isConnectionRequesting == requesting) return
+        isConnectionRequesting = requesting
+        if (isAdvertising) {
+            stopAdvertising()
+            startAdvertising()
+        }
+    }
 }

@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
 
     // UI States
     private var selectedUris by mutableStateOf<List<android.net.Uri>>(emptyList())
+    private var totalSelectedSize by mutableStateOf(0L)
     private var manualSelectedPeer by mutableStateOf<Peer?>(null)
     private var isManualSenderMode by mutableStateOf(false)
     
@@ -161,6 +162,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
             selectedUris = uris
+            
+            // Compute total size
+            totalSelectedSize = uris.sumOf { uri ->
+                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (sizeIndex != -1 && cursor.moveToFirst()) cursor.getLong(sizeIndex) else 0L
+                } ?: 0L
+            }
+            
             Toast.makeText(this, "Selected ${uris.size} files", Toast.LENGTH_SHORT).show()
         }
     }
@@ -289,11 +299,27 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
+                        val coroutineScope = rememberCoroutineScope()
                         RadarView(
                             peers = peers,
                             onPeerTapped = { peer ->
                                 manualSelectedPeer = peer
                                 isManualSenderMode = true
+                                // If files selected, start connection
+                                if (selectedUris.isNotEmpty() && isBound && airShareService != null) {
+                                    airShareService?.connectToPeer(peer)
+                                    airShareService?.getBleManager()?.setConnectionRequestMode(true)
+                                    
+                                    // Auto-disable connection request after 30 seconds
+                                    coroutineScope.launch {
+                                        delay(30_000)
+                                        airShareService?.getBleManager()?.setConnectionRequestMode(false)
+                                    }
+                                } else {
+                                    Toast.makeText(this@MainActivity, "Please select files first", Toast.LENGTH_SHORT).show()
+                                    manualSelectedPeer = null
+                                    isManualSenderMode = false
+                                }
                             }
                         )
 
@@ -335,13 +361,18 @@ class MainActivity : ComponentActivity() {
                                     SelectFilesButton()
                                     
                                     if (selectedUris.isNotEmpty()) {
+                                        val sizeText = when {
+                                            totalSelectedSize >= 1_000_000L -> "%.1f MB".format(totalSelectedSize / 1_000_000f)
+                                            totalSelectedSize >= 1_000L -> "%.1f KB".format(totalSelectedSize / 1_000f)
+                                            else -> "$totalSelectedSize B"
+                                        }
                                         Surface(
                                             modifier = Modifier.padding(top = 12.dp),
                                             color = Color(0xFF34C759).copy(alpha = 0.1f),
                                             shape = RoundedCornerShape(50)
                                         ) {
                                             Text(
-                                                text = "${selectedUris.size} Artifacts Prepared",
+                                                text = "${selectedUris.size} Artifacts • $sizeText",
                                                 color = Color(0xFF34C759),
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Bold,
