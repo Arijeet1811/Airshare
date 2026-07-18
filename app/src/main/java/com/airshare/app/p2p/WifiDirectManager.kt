@@ -39,7 +39,11 @@ class WifiDirectManager(
             addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
             addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
         }
-        context.registerReceiver(receiver, intentFilter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(receiver, intentFilter)
+        }
     }
 
     fun unregisterReceiver(context: Context) {
@@ -83,52 +87,75 @@ class WifiDirectManager(
 
     fun initiateDiscovery() {
         Log.i("WifiDirect", "Starting peer discovery...")
-        manager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() {
-                Log.d("WifiDirect", "Discovery started successfully")
-                requestPeers()
-            }
-            override fun onFailure(reason: Int) {
-                Log.e("WifiDirect", "Discovery failed: $reason")
-            }
-        })
+        try {
+            manager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d("WifiDirect", "Discovery started successfully")
+                    requestPeers()
+                }
+                override fun onFailure(reason: Int) {
+                    Log.e("WifiDirect", "Discovery failed: $reason")
+                }
+            })
+        } catch (e: SecurityException) {
+            Log.e("WifiDirect", "SecurityException in discoverPeers: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("WifiDirect", "Error in discoverPeers: ${e.message}")
+        }
     }
 
     private fun requestPeers() {
-        manager?.requestPeers(channel) { peersList ->
-            val devices = peersList.deviceList.toList()
-            Log.d("WifiDirect", "Found ${devices.size} WiFi Direct devices")
-            _discoveredWifiDevices.value = devices
+        try {
+            manager?.requestPeers(channel) { peersList ->
+                val devices = peersList.deviceList.toList()
+                Log.d("WifiDirect", "Found ${devices.size} WiFi Direct devices")
+                _discoveredWifiDevices.value = devices
+            }
+        } catch (e: SecurityException) {
+            Log.e("WifiDirect", "SecurityException in requestPeers: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("WifiDirect", "Error in requestPeers: ${e.message}")
         }
     }
 
     /**
      * Connect to a WiFi Direct device
      * @param forceGroupOwner If true, this device will always become Group Owner
+     * @param groupOwnerIntent Intent value (0 to 15) to use. If negative, fallback to forceGroupOwner or default hash negotiation.
      */
-    fun connect(device: WifiP2pDevice, forceGroupOwner: Boolean = false) {
-        Log.i("WifiDirect", "Connecting to: ${device.deviceName} (${device.deviceAddress}), forceGroupOwner=$forceGroupOwner")
+    fun connect(device: WifiP2pDevice, forceGroupOwner: Boolean = false, groupOwnerIntent: Int = -1) {
+        Log.i("WifiDirect", "Connecting to: ${device.deviceName} (${device.deviceAddress}), forceGroupOwner=$forceGroupOwner, intent=$groupOwnerIntent")
 
-        manager?.cancelConnect(channel, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() { performConnect(device, forceGroupOwner) }
-            override fun onFailure(reason: Int) { performConnect(device, forceGroupOwner) }
-        })
+        try {
+            manager?.cancelConnect(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() { performConnect(device, forceGroupOwner, groupOwnerIntent) }
+                override fun onFailure(reason: Int) { performConnect(device, forceGroupOwner, groupOwnerIntent) }
+            })
+        } catch (e: SecurityException) {
+            Log.e("WifiDirect", "SecurityException in cancelConnect: ${e.message}")
+            performConnect(device, forceGroupOwner, groupOwnerIntent)
+        } catch (e: Exception) {
+            Log.e("WifiDirect", "Error in cancelConnect: ${e.message}")
+            performConnect(device, forceGroupOwner, groupOwnerIntent)
+        }
     }
 
     /**
      * Create WifiP2pConfig with proper device address handling for all API levels
      */
-    private fun performConnect(device: WifiP2pDevice, forceGroupOwner: Boolean = false) {
+    private fun performConnect(device: WifiP2pDevice, forceGroupOwner: Boolean = false, groupOwnerIntent: Int = -1) {
         val myId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
         
         // If forceGroupOwner is true, this device will ALWAYS be Group Owner (intent = 15)
-        val intentValue = if (forceGroupOwner) {
+        val intentValue = if (groupOwnerIntent in 0..15) {
+            groupOwnerIntent
+        } else if (forceGroupOwner) {
             15
         } else {
             if (myId.hashCode() > device.deviceAddress.hashCode()) 15 else 0
         }
 
-        Log.d("WifiDirect", "Group Owner Intent: $intentValue (forceGroupOwner=$forceGroupOwner)")
+        Log.d("WifiDirect", "Group Owner Intent: $intentValue (forceGroupOwner=$forceGroupOwner, requestedIntent=$groupOwnerIntent)")
 
         val config = WifiP2pConfig()
 
@@ -138,30 +165,42 @@ class WifiDirectManager(
         // Set group owner intent using property
         config.groupOwnerIntent = intentValue
 
-        manager?.connect(channel, config, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() {
-                Log.i("WifiDirect", "Connect request queued successfully (forceGroupOwner=$forceGroupOwner)")
-            }
-            override fun onFailure(reason: Int) {
-                Log.e("WifiDirect", "Connect failed with reason: $reason")
-            }
-        })
+        try {
+            manager?.connect(channel, config, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.i("WifiDirect", "Connect request queued successfully (forceGroupOwner=$forceGroupOwner, intent=$intentValue)")
+                }
+                override fun onFailure(reason: Int) {
+                    Log.e("WifiDirect", "Connect failed with reason: $reason")
+                }
+            })
+        } catch (e: SecurityException) {
+            Log.e("WifiDirect", "SecurityException in connect: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("WifiDirect", "Error in connect: ${e.message}")
+        }
     }
 
     fun requestConnectionInfo() {
-        manager?.requestConnectionInfo(channel) { info ->
-            Log.d("WifiDirect", "Connection Info: groupFormed=${info.groupFormed}, isOwner=${info.isGroupOwner}, ownerAddress=${info.groupOwnerAddress}")
+        try {
+            manager?.requestConnectionInfo(channel) { info ->
+                Log.d("WifiDirect", "Connection Info: groupFormed=${info.groupFormed}, isOwner=${info.isGroupOwner}, ownerAddress=${info.groupOwnerAddress}")
 
-            if (info.groupFormed) {
-                if (info.groupOwnerAddress == null) {
-                    Log.w("WifiDirect", "Group formed but owner address null → retrying in 800ms")
-                    android.os.Handler(Looper.getMainLooper()).postDelayed({
-                        requestConnectionInfo()
-                    }, 800)
-                } else {
-                    onConnectionInfoAvailable(info)
+                if (info.groupFormed) {
+                    if (info.groupOwnerAddress == null) {
+                        Log.w("WifiDirect", "Group formed but owner address null → retrying in 800ms")
+                        android.os.Handler(Looper.getMainLooper()).postDelayed({
+                            requestConnectionInfo()
+                        }, 800)
+                    } else {
+                        onConnectionInfoAvailable(info)
+                    }
                 }
             }
+        } catch (e: SecurityException) {
+            Log.e("WifiDirect", "SecurityException in requestConnectionInfo: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("WifiDirect", "Error in requestConnectionInfo: ${e.message}")
         }
     }
 

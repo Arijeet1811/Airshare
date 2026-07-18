@@ -83,13 +83,6 @@ class MainActivity : ComponentActivity() {
             add(Manifest.permission.BLUETOOTH_CONNECT)
             add(Manifest.permission.NEARBY_WIFI_DEVICES)
             add(Manifest.permission.POST_NOTIFICATIONS)
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
-                // Note: READ_MEDIA_IMAGES and READ_MEDIA_VIDEO are also often needed alongside partial access
-                add(Manifest.permission.READ_MEDIA_IMAGES)
-                add(Manifest.permission.READ_MEDIA_VIDEO)
-            }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             add(Manifest.permission.BLUETOOTH_SCAN)
             add(Manifest.permission.BLUETOOTH_ADVERTISE)
@@ -97,6 +90,7 @@ class MainActivity : ComponentActivity() {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
         } else {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
     }
 
@@ -118,10 +112,15 @@ class MainActivity : ComponentActivity() {
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as AirShareService.LocalBinder
-            airShareService = binder.getService()
+            val srv = binder.getService()
+            airShareService = srv
             isBound = true
             serviceRunningState = AirShareService.isRunning
             LogUtil.d("MainActivity", "Service connected, running=${serviceRunningState}")
+            if (srv.isLowPowerMode()) {
+                srv.resetToActiveMode()
+                Toast.makeText(this@MainActivity, "Searching nearby...", Toast.LENGTH_SHORT).show()
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -171,6 +170,13 @@ class MainActivity : ComponentActivity() {
                 } ?: 0L
             }
             
+            if (isBound && airShareService != null) {
+                val filesToSend = uris.map { uri ->
+                    Pair(uri, getFileName(uri))
+                }
+                airShareService?.setPendingFiles(filesToSend)
+            }
+            
             Toast.makeText(this, "Selected ${uris.size} files", Toast.LENGTH_SHORT).show()
         }
     }
@@ -180,17 +186,40 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            val peers by if (isBound && airShareService != null) {
-                airShareService!!.getDiscoveredPeers().collectAsState()
-            } else remember { mutableStateOf(emptyList<Peer>()) }
+            var peers by remember { mutableStateOf(emptyList<Peer>()) }
+            var transferState by remember { mutableStateOf<TransferState>(TransferState.Idle) }
+            var roleSelectionPeer by remember { mutableStateOf<Peer?>(null) }
 
-            val transferState by if (isBound && airShareService != null) {
-                airShareService!!.transferState.collectAsState()
-            } else remember { mutableStateOf(TransferState.Idle) }
+            LaunchedEffect(isBound, airShareService) {
+                val service = airShareService
+                if (isBound && service != null) {
+                    launch {
+                        service.getDiscoveredPeers().collect { peers = it }
+                    }
+                    launch {
+                        service.transferState.collect { transferState = it }
+                    }
+                    launch {
+                        service.roleSelectionPeer.collect { roleSelectionPeer = it }
+                    }
+                } else {
+                    peers = emptyList()
+                    transferState = TransferState.Idle
+                    roleSelectionPeer = null
+                }
+            }
 
-            val roleSelectionPeer by if (isBound && airShareService != null) {
-                airShareService!!.roleSelectionPeer.collectAsState()
-            } else remember { mutableStateOf<Peer?>(null) }
+            // ✅ Clean state machine UI transitions to prevent dual-overlay collision and clear files on success
+            LaunchedEffect(transferState) {
+                if (transferState !is TransferState.Idle && transferState !is TransferState.Request) {
+                    manualSelectedPeer = null
+                    isManualSenderMode = false
+                }
+                if (transferState is TransferState.Success) {
+                    selectedUris = emptyList()
+                    totalSelectedSize = 0L
+                }
+            }
 
             val incomingRequest = transferState as? TransferState.Request
             
@@ -302,14 +331,19 @@ class MainActivity : ComponentActivity() {
                         RadarView(
                             peers = peers,
                             onPeerTapped = { peer ->
-                                // Optional: You could still manually trigger role selection if needed
-                                // but typically proximity does it. Let's keep manual tap for direct connect.
-                                manualSelectedPeer = peer
-                                isManualSenderMode = true
                                 if (selectedUris.isEmpty()) {
                                     Toast.makeText(this@MainActivity, "Please select files first", Toast.LENGTH_SHORT).show()
-                                    manualSelectedPeer = null
-                                    isManualSenderMode = false
+                                } else {
+                                    manualSelectedPeer = peer
+                                    isManualSenderMode = true
+                                    
+                                    // Set files as pending
+                                    val filesToSend = selectedUris.map { uri ->
+                                        Pair(uri, getFileName(uri))
+                                    }
+                                    airShareService?.setPendingFiles(filesToSend)
+                                    // Initiate connect with groupOwnerIntent = 0 (we are sender, they should be GO)
+                                    airShareService?.connectToPeer(peer, groupOwnerIntent = 0)
                                 }
                             }
                         )
@@ -557,15 +591,15 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun BatteryDataSaverPrompt() {
-    val context = LocalContext.current
-    val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-    val isOptimized = remember { !pm.isIgnoringBatteryOptimizations(context.packageName) }
-    val isDataRestricted = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            cm.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
-        } else false
-    }
+        val context = LocalContext.current
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val isOptimized = remember { !pm.isIgnoringBatteryOptimizations(context.packageName) }
+        val isDataRestricted = remember {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                cm.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+            } else false
+        }
 
     if (isOptimized || isDataRestricted) {
         Surface(

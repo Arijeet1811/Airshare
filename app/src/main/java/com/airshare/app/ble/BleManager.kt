@@ -112,12 +112,9 @@ class BleManager(
             val hasOurService = scanRecord.serviceUuids?.any { it.uuid == SERVICE_UUID } == true
             if (!hasOurService) return
 
-            val deviceName = scanRecord.deviceName 
-                ?: device.name 
-                ?: "Unknown"
-            val rssi = result.rssi
+            var parsedName = scanRecord.deviceName ?: device.name ?: ""
 
-            // ✅ Extract role from manufacturer data
+            // ✅ Extract role and name from manufacturer data
             var peerRole: Byte = ROLE_UNDECIDED
             var bleIdentifier = device.address // fallback
             
@@ -127,11 +124,23 @@ class BleManager(
                     bleIdentifier = data.copyOfRange(0, 6).joinToString("") { "%02x".format(it) }
                     // 7th byte = role
                     peerRole = data[6]
+                    
+                    // If manufacturer data has more than 7 bytes, parse the remaining as name!
+                    if (data.size > 7 && (parsedName.isEmpty() || parsedName == "Unknown" || parsedName == "Nearby Device")) {
+                        val nameBytes = data.copyOfRange(7, data.size)
+                        val mfrName = String(nameBytes, Charsets.UTF_8).trim()
+                        if (mfrName.isNotEmpty()) {
+                            parsedName = mfrName
+                        }
+                    }
                 } else if (data.size == 6) {
                     bleIdentifier = data.copyOfRange(0, 6).joinToString("") { "%02x".format(it) }
                     peerRole = ROLE_UNDECIDED
                 }
             }
+
+            val deviceName = if (parsedName.isEmpty() || parsedName == "Unknown") "Nearby Device" else parsedName
+            val rssi = result.rssi
 
             val smoothedRssi = getSmoothedRssi(device.address, rssi)
             val isClose = smoothedRssi > PROXIMITY_THRESHOLD
@@ -344,36 +353,42 @@ class BleManager(
             .setIncludeTxPowerLevel(false)
             .build()
 
-        // ✅ Scan Response: Device Name + Manufacturer Data (role encoded)
+        // ✅ Scan Response: Device Name + Manufacturer Data (role encoded + truncated name)
         val idBytes = sessionId.take(12).chunked(2).mapNotNull {
             it.toIntOrNull(16)?.toByte()
         }.toByteArray()
         
-        // Manufacturer Data = 6 bytes device ID + 1 byte role = 7 bytes total
-        val mfrData = idBytes + byteArrayOf(mySelectedRole)
+        // Manufacturer Data = 6 bytes device ID + 1 byte role + up to 8 bytes name
+        val deviceName = adapter?.name ?: "AirShare"
+        val nameBytes = deviceName.toByteArray(Charsets.UTF_8)
+        val truncatedNameBytes = if (nameBytes.size > 8) {
+            nameBytes.copyOfRange(0, 8)
+        } else {
+            nameBytes
+        }
+        val mfrData = idBytes + byteArrayOf(mySelectedRole) + truncatedNameBytes
 
         val scanResponseBuilder = AdvertiseData.Builder()
             .addManufacturerData(AIRSHARE_MANUFACTURER_ID, mfrData)
         
-        // ✅ Include device name but TRUNCATE if needed
-        val maxNameLength = 17
-        val deviceName = adapter?.name ?: "AirShare"
-        val truncatedName = if (deviceName.length > maxNameLength) {
-            deviceName.take(maxNameLength - 1) + "…"
-        } else {
-            deviceName
-        }
-        
-        if (truncatedName.length <= 20) {
+        // ✅ Include device name only if actual system name fits in the 31-byte limit.
+        // Otherwise, do not include it so advertising does not fail.
+        if (deviceName.length <= 8) {
             scanResponseBuilder.setIncludeDeviceName(true)
         } else {
-            LogUtil.w("BleManager", "Device name too long, using generic name in scan response")
+            LogUtil.w("BleManager", "Device name is too long ($deviceName), omitting full name from BLE scan response and relying on manufacturer data")
         }
 
         val scanResponse = scanResponseBuilder.build()
 
-        adapter?.bluetoothLeAdvertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
-        isAdvertising = true
+        try {
+            adapter?.bluetoothLeAdvertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
+            isAdvertising = true
+        } catch (e: SecurityException) {
+            LogUtil.e("BleManager", "SecurityException starting advertising: ${e.message}")
+        } catch (e: Exception) {
+            LogUtil.e("BleManager", "Error starting advertising: ${e.message}")
+        }
     }
 
     private fun startScanning() {
@@ -395,14 +410,26 @@ class BleManager(
             .setReportDelay(0)  // Immediate reporting
             .build()
 
-        adapter?.bluetoothLeScanner?.startScan(listOf(serviceFilter), settings, scanCallback)
-        isScanning = true
-        LogUtil.d("BleManager", "Scanning started")
+        try {
+            adapter?.bluetoothLeScanner?.startScan(listOf(serviceFilter), settings, scanCallback)
+            isScanning = true
+            LogUtil.d("BleManager", "Scanning started")
+        } catch (e: SecurityException) {
+            LogUtil.e("BleManager", "SecurityException starting scan: ${e.message}")
+        } catch (e: Exception) {
+            LogUtil.e("BleManager", "Error starting scan: ${e.message}")
+        }
     }
 
     private fun stopScanningOnly() {
         if (isScanning) {
-            adapter?.bluetoothLeScanner?.stopScan(scanCallback)
+            try {
+                adapter?.bluetoothLeScanner?.stopScan(scanCallback)
+            } catch (e: SecurityException) {
+                LogUtil.e("BleManager", "SecurityException stopping scan: ${e.message}")
+            } catch (e: Exception) {
+                LogUtil.e("BleManager", "Error stopping scan: ${e.message}")
+            }
             isScanning = false
             LogUtil.d("BleManager", "Scanning stopped")
         }
@@ -410,7 +437,13 @@ class BleManager(
 
     private fun stopAdvertising() {
         if (isAdvertising) {
-            adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
+            try {
+                adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
+            } catch (e: SecurityException) {
+                LogUtil.e("BleManager", "SecurityException stopping advertising: ${e.message}")
+            } catch (e: Exception) {
+                LogUtil.e("BleManager", "Error stopping advertising: ${e.message}")
+            }
             isAdvertising = false
             LogUtil.d("BleManager", "Advertising stopped")
         }

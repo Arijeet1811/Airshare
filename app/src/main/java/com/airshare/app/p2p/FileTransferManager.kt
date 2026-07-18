@@ -330,43 +330,71 @@ class FileTransferManager {
         val fileIV = ByteArray(fileIVSize).also { input.readFully(it) }
 
         val safeName = sanitizeFileName(fileName)
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
-            put(MediaStore.MediaColumns.MIME_TYPE, metadataJson.getString("mimeType"))
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AirShare")
+        val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                put(MediaStore.MediaColumns.MIME_TYPE, metadataJson.getString("mimeType"))
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AirShare")
+            }
+            contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IOException("Failed to create file via MediaStore")
+        } else {
+            val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            val airShareDir = File(downloadDir, "AirShare")
+            if (!airShareDir.exists()) {
+                airShareDir.mkdirs()
+            }
+            val destinationFile = File(airShareDir, safeName)
+            Uri.fromFile(destinationFile)
         }
-
-        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Failed to create file")
 
         var actualHash = ""
-        contentResolver.openOutputStream(uri)?.use { fileOut ->
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
-                init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
+        try {
+            val outputStream = if (uri.scheme == "file") {
+                FileOutputStream(File(uri.path!!))
+            } else {
+                contentResolver.openOutputStream(uri) ?: throw IOException("Failed to open output stream")
             }
 
-            val buffer = ByteArray(BUFFER_SIZE)
-            val encryptedSize = fileSize + 16L  // fileSize + GCM tag
-            var totalReceived = 0L
+            outputStream.use { fileOut ->
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+                    init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, fileIV))
+                }
 
-            while (totalReceived < encryptedSize) {
-                val toRead = minOf(buffer.size.toLong(), encryptedSize - totalReceived).toInt()
-                input.readFully(buffer, 0, toRead)
-                val decrypted = cipher.update(buffer, 0, toRead)
-                decrypted?.let { fileOut.write(it) }
-                totalReceived += toRead
-                // Progress: show min of totalReceived and fileSize (don't show >100%)
-                onProgress(fileName, minOf(totalReceived, fileSize), fileSize)
+                val buffer = ByteArray(BUFFER_SIZE)
+                val encryptedSize = fileSize + 16L  // fileSize + GCM tag
+                var totalReceived = 0L
+
+                while (totalReceived < encryptedSize) {
+                    val toRead = minOf(buffer.size.toLong(), encryptedSize - totalReceived).toInt()
+                    input.readFully(buffer, 0, toRead)
+                    val decrypted = cipher.update(buffer, 0, toRead)
+                    decrypted?.let { fileOut.write(it) }
+                    totalReceived += toRead
+                    // Progress: show min of totalReceived and fileSize (don't show >100%)
+                    onProgress(fileName, minOf(totalReceived, fileSize), fileSize)
+                }
+
+                val final = cipher.doFinal()
+                final?.let { fileOut.write(it) }
             }
 
-            val final = cipher.doFinal()
-            final?.let { fileOut.write(it) }
             actualHash = calculateHashFromUri(contentResolver, uri)
-        }
 
-        if (expectedHash.isNotEmpty() && actualHash != expectedHash) {
-            contentResolver.delete(uri, null, null)
-            throw IOException("Hash mismatch")
+            if (expectedHash.isNotEmpty() && actualHash != expectedHash) {
+                throw IOException("Hash mismatch")
+            }
+        } catch (e: Exception) {
+            try {
+                if (uri.scheme == "file") {
+                    File(uri.path!!).delete()
+                } else {
+                    contentResolver.delete(uri, null, null)
+                }
+            } catch (cleanupEx: Exception) {
+                LogUtil.e(TAG, "Failed to clean up partial file: ${cleanupEx.message}")
+            }
+            throw e
         }
 
         LogUtil.i(TAG, "File received: $fileName")
@@ -386,7 +414,23 @@ class FileTransferManager {
     }
 
     private fun calculateHashFromUri(cr: ContentResolver, uri: Uri): String {
-        return cr.openFileDescriptor(uri, "r")?.use { calculateHash(it.fileDescriptor) } ?: ""
+        return if (uri.scheme == "file") {
+            calculateHash(File(uri.path!!))
+        } else {
+            cr.openFileDescriptor(uri, "r")?.use { calculateHash(it.fileDescriptor) } ?: ""
+        }
+    }
+
+    private fun calculateHash(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { fis ->
+            val buffer = ByteArray(BUFFER_SIZE)
+            var bytesRead: Int
+            while (fis.read(buffer).also { bytesRead = it } != -1) {
+                digest.update(buffer, 0, bytesRead)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun calculateHash(fd: FileDescriptor): String {

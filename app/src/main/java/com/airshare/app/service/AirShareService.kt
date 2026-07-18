@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import com.airshare.app.MainActivity
 import com.airshare.app.R
 import com.airshare.app.util.LogUtil
+import android.net.wifi.p2p.WifiP2pDevice
 
 import com.airshare.app.ble.BleManager
 import com.airshare.app.model.Peer
@@ -160,15 +161,49 @@ class AirShareService : Service() {
         bleManager.setRole(role)
     }
 
+    private fun findMatchedWifiDevice(peer: Peer): WifiP2pDevice? {
+        val wifiDevices = wifiDirectManager.discoveredWifiDevices.value
+        if (wifiDevices.isEmpty()) return null
+        
+        val peerName = peer.name.trim()
+        
+        // 1. Exact name match (ignoring case)
+        var match = wifiDevices.find { 
+            it.deviceName.trim().equals(peerName, ignoreCase = true) 
+        }
+        if (match != null) return match
+        
+        // 2. Fuzzy name match (handling "DIRECT-*" prefixes or substrings)
+        match = wifiDevices.find { dev ->
+            val cleanDevName = dev.deviceName.removePrefix("DIRECT-").replace(Regex("^\\w{2}-"), "").trim()
+            val cleanPeerName = peerName.removePrefix("DIRECT-").replace(Regex("^\\w{2}-"), "").trim()
+            cleanDevName.equals(cleanPeerName, ignoreCase = true) ||
+            cleanDevName.contains(cleanPeerName, ignoreCase = true) ||
+            cleanPeerName.contains(cleanDevName, ignoreCase = true)
+        }
+        if (match != null) return match
+
+        // 3. Match on BleIdentifier if deviceAddress matches
+        match = wifiDevices.find { dev ->
+            peer.bleIdentifier.isNotEmpty() && 
+            dev.deviceAddress.replace(":", "").equals(peer.bleIdentifier.replace(":", ""), ignoreCase = true)
+        }
+        if (match != null) return match
+        
+        // 4. Fallback: If only 1 device is discovered, assume it is the one
+        if (wifiDevices.size == 1) {
+            LogUtil.d("AirShareService", "Single WiFi Direct device fallback matched: ${wifiDevices.first().deviceName}")
+            return wifiDevices.first()
+        }
+        
+        return null
+    }
+
     private fun initiateConnectionToSender(senderPeer: Peer) {
         serviceScope.launch(Dispatchers.IO) {
             wifiDirectManager.initiateDiscovery()
             delay(2000)
-            val matchedDevice = wifiDirectManager.discoveredWifiDevices.value.find { dev ->
-                senderPeer.bleIdentifier.isNotEmpty() &&
-                dev.deviceAddress.replace(":", "")
-                    .equals(senderPeer.bleIdentifier.replace(":", ""), ignoreCase = true)
-            }
+            val matchedDevice = findMatchedWifiDevice(senderPeer)
             matchedDevice?.let {
                 // Force receiver to be Group Owner
                 wifiDirectManager.connect(it, forceGroupOwner = true)
@@ -181,20 +216,16 @@ class AirShareService : Service() {
         }
     }
 
-    fun connectToPeer(peer: Peer) {
+    fun connectToPeer(peer: Peer, groupOwnerIntent: Int = -1) {
         serviceScope.launch(Dispatchers.IO) {
             lastConnectedHost = null
             wifiDirectManager.initiateDiscovery()
             delay(2000)  // wait for devices
 
-            val matchedDevice = wifiDirectManager.discoveredWifiDevices.value.find { dev ->
-                dev.deviceName.trim().equals(peer.name.trim(), ignoreCase = true) ||
-                (peer.bleIdentifier.isNotEmpty() && dev.deviceAddress.replace(":", "")
-                    .equals(peer.bleIdentifier.replace(":", ""), ignoreCase = true))
-            }
+            val matchedDevice = findMatchedWifiDevice(peer)
             matchedDevice?.let {
-                LogUtil.i("AirShareService", "Initiating WiFi Direct to ${it.deviceName}")
-                wifiDirectManager.connect(it)
+                LogUtil.i("AirShareService", "Initiating WiFi Direct to ${it.deviceName} with groupOwnerIntent=$groupOwnerIntent")
+                wifiDirectManager.connect(it, groupOwnerIntent = groupOwnerIntent)
             } ?: run {
                 LogUtil.w("AirShareService", "No WiFi device matched for peer ${peer.name}")
                 withContext(Dispatchers.Main) {
@@ -299,6 +330,11 @@ class AirShareService : Service() {
                 result.onSuccess {
                     _transferState.value = TransferState.Success
                     success = true
+                    // Auto reset after success
+                    serviceScope.launch {
+                        delay(2500)
+                        _transferState.compareAndSet(TransferState.Success, TransferState.Idle)
+                    }
                 }.onFailure { e ->
                     LogUtil.e("AirShareService", "Send attempt $attempt failed", e)
                     if (attempt == maxAttempts) {
@@ -337,11 +373,7 @@ class AirShareService : Service() {
             serviceScope.launch(Dispatchers.IO) {
                 wifiDirectManager.initiateDiscovery()
                 delay(2000)
-                val matchedDevice = wifiDirectManager.discoveredWifiDevices.value.find {
-                    it.deviceName.trim().equals(peer.name.trim(), ignoreCase = true)
-                } ?: wifiDirectManager.discoveredWifiDevices.value.find { dev ->
-                    peer.bleIdentifier.isNotEmpty() && dev.deviceAddress.replace(":", "").equals(peer.bleIdentifier.replace(":", ""), ignoreCase = true)
-                }
+                val matchedDevice = findMatchedWifiDevice(peer)
                 
                 matchedDevice?.let { 
                     LogUtil.i("AirShareService", "User accepted connection to ${it.deviceName}")
