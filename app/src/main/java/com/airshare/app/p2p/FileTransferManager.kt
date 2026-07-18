@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.content.ContentValues
 import android.provider.MediaStore
+import android.os.Build
 import com.airshare.app.util.LogUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
